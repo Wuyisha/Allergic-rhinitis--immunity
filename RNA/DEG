@@ -1,0 +1,78 @@
+library(Seurat)
+library(dplyr)
+library(Matrix)
+library(ComplexHeatmap)
+library(ggplot2)
+library(ggrepel)
+library(ggrastr)
+
+setwd('/media/AnalysisTempDisk2/Wuyisha/HNM_IMMUNE/RNA/DEG_My/')
+dir.create("DEG_PAR_vs_NAR")
+dir.create("DEG_PAR_vs_NAR/Raw")
+dir.create("DEG_PAR_vs_NAR/Filter")
+dir.create("DEG_PAR_vs_NAR/Fig")
+
+
+T_CD4 <- readRDS('/media/AnalysisTempDisk2/Wuyisha/HNM_IMMUNE/RNA/data/data_Myeloid.rds')
+Cells.sub <- subset(T_CD4@meta.data, group_A!="PAR")
+T_CD4 <- subset(T_CD4, cells=row.names(Cells.sub))
+T_CD4
+
+cell_types <- unique(T_CD4$celltype)
+Idents(T_CD4) <- T_CD4$group_a
+
+## Disease
+cell_types <- unique(T_CD4$celltype)
+# Assuming group1 and group2 are the values of the grouping variables
+group1 <- ‘PAR’
+group2 <- ‘NAR’
+
+# Initialise summary data frame
+summary_df <- data.frame(Cell_Type = character(),
+                         Num_Up_Regulated = integer(),
+                         Num_Down_Regulated = integer(),
+                         stringsAsFactors = FALSE)
+
+# Iterate over each cell type and perform analysis
+for (cell_type in cell_types) {
+  # Filter cells of the current cell type
+  cells_sub <- subset(T_CD4, subset = celltype == cell_type)
+  
+  # Identify marker genes
+  markers <- FindMarkers(cells_sub, ident.1 = group1, ident.2 = group2, min.pct = 0.25, logfc.threshold = 0)
+  
+  # Save results to CSV file
+  write.csv(markers, file = paste0(‘./DEG_PAR_vs_NAR/Raw/Raw_marker_genes_’, cell_type, ‘_’, group1, “_vs_”, group2, ‘.csv’), row.names = TRUE)  
+filtered_markers <- markers %>%
+    filter(p_val_adj < 0.05 & abs(avg_log2FC) > 0.25)
+  
+  # View filtered results
+  head(filtered_markers)
+  
+  # Save filtered results to CSV file
+  write.csv(filtered_markers, file = paste0(‘./DEG_PAR_vs_NAR/Filter/Filter_marker_genes_’, cell_type, ‘_’, group1, “_vs_”, group2, ‘.csv’), row.names = TRUE)
+  
+  # Count number of filtered markers with avg_logFC > 0.25 or < -0.25 per cell type
+  num_up_regulated <- sum(filtered_markers$avg_log2FC > 0.25)
+  num_down_regulated <- sum(filtered_markers$avg_log2FC < -0.25)
+  
+  # Append results to summary data frame
+  summary_df <- rbind(summary_df, data.frame(Cell_Type = cell_type,
+                                             Num_Up_Regulated = num_up_regulated,
+                                             Num_Down_Regulated = num_down_regulated,
+                                             stringsAsFactors = FALSE))
+  
+  # Plot volcano plot
+  ggplot(markers, aes(x = avg_log2FC, y = -log10(p_val_adj), colour = p_val_adj < 0.1 & abs(avg_log2FC) > 0.25)) +
+    geom_point(alpha = 0.7) +
+    labs(title = paste0(‘Volcano Plot for ’, cell_type, ‘ (’, group1, ‘ vs ’, group2, ‘)’),
+         x = ‘Log2 Fold Change’,
+         y = ‘-log10(Adjusted P-value)’) +
+    scale_color_manual(values = c(‘grey’, “red”), labels = c(‘Non-significant’, ‘Significant’)) +
+    theme_minimal()
+  
+  ggsave(filename = paste0(‘./DEG_PAR_vs_NAR/Fig/marker_genes_’, cell_type, ‘_’, group1, “_vs_”, group2, ‘_volcano_plot.pdf’))
+}
+
+# Save summary results to CSV file
+write.csv(summary_df, file = paste0(‘./DEG_PAR_vs_NAR/My_Summary_Up_Down_DEG_’, group1, “_vs_”, group2, ‘_FDR_0.05.csv’), row.names = FALSE)
