@@ -368,11 +368,7 @@ vw.max <- max(cellchat_NAR@net$count[cellchat_NAR@net$count>0],
               cellchat_MAR@net$count[cellchat_MAR@net$count>0])
 
 ################Antigen presentation ################
-
-## 3. 固定细胞顺序（chord/circle 必备）
-# cell.ord <- levels(cc1@idents)   # 或你自己定义的固定向量
-
-## 4. 画图——两个对象用 **完全一样的参数**
+cell.ord <- levels(cc1@idents)   
 p1 <- netVisual_aggregate(cellchat_NAR,
                           signaling        =  c("MHC-II",'CD80') ,
                           layout           = "circle",
@@ -437,27 +433,18 @@ dev.off()
 
 
 
-
-
-
 ######################################Chemokine#########################3
-## 0. 预备：统一颜色
-# cell.col <- c("Fibroblast"="#1f77b4", "Macrophage"="#ff7f0e", "T.cell"="#2ca02c")
-
-## 1. 计算全局最大 weight（或 count）
 ew.max <- max(cellchat_NAR@net$weight[cellchat_NAR@net$weight>0],
               cellchat_SAR@net$weight[cellchat_SAR@net$weight>0],
               cellchat_MAR@net$weight[cellchat_MAR@net$weight>0])
 
-## 2. 计算全局最大 vertex weight（可选）
 vw.max <- max(cellchat_NAR@net$count[cellchat_NAR@net$count>0],
               cellchat_SAR@net$count[cellchat_SAR@net$count>0],
               cellchat_MAR@net$count[cellchat_MAR@net$count>0])
 
-## 3. 固定细胞顺序（chord/circle 必备）
-# cell.ord <- levels(cc1@idents)   # 或你自己定义的固定向量
 
-## 4. 画图——两个对象用 **完全一样的参数**
+
+
 p1 <- netVisual_aggregate(cellchat_NAR,
                           signaling        =  c('ADGRE','CXCL','CCL','ANNEXIN','PLAU') ,
                           layout           = "circle",
@@ -500,7 +487,7 @@ p3 <- netVisual_aggregate(cellchat_MAR,
                           thresh           = 0.05)
 ## 1. NAR
 pdf("NAR_MO-circle.pdf", width = 8, height = 8)
-print(p1)          # 或直接 netVisual_aggregate(...) 在这里写一行
+print(p1)        
 dev.off()
 
 ## 2. SAR
