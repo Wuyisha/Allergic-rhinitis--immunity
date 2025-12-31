@@ -63,7 +63,7 @@ filtered_markers <- markers %>%
                                              stringsAsFactors = FALSE))
   
   # Plot volcano plot
-  ggplot(markers, aes(x = avg_log2FC, y = -log10(p_val_adj), colour = p_val_adj < 0.1 & abs(avg_log2FC) > 0.25)) +
+  ggplot(markers, aes(x = avg_log2FC, y = -log10(p_val_adj), colour = p_val_adj < 0.05 & abs(avg_log2FC) > 0.25)) +
     geom_point(alpha = 0.7) +
     labs(title = paste0(‘Volcano Plot for ’, cell_type, ‘ (’, group1, ‘ vs ’, group2, ‘)’),
          x = ‘Log2 Fold Change’,
@@ -76,3 +76,77 @@ filtered_markers <- markers %>%
 
 # Save summary results to CSV file
 write.csv(summary_df, file = paste0(‘./DEG_PAR_vs_NAR/My_Summary_Up_Down_DEG_’, group1, “_vs_”, group2, ‘_FDR_0.05.csv’), row.names = FALSE)
+
+
+
+
+# Merge all Raw files
+setwd(“/media/AnalysisTempDisk2/Wuyisha/HNM_IMMUNE/RNA/DEG_My/DEG_PAR_vs_NAR/Raw”)
+
+file_list <- list.files(pattern = ‘^Raw_marker_genes_.*\\.csv$’)
+file_list
+# Read all files and merge into a single data frame, extracting specific parts of filenames as new columns
+merged_data <- do.call(rbind, lapply(file_list, function(file_name) {
+  # Read the current file
+  data <- read.csv(file_name)
+  
+  cluster_name <- sub(‘Raw_marker_genes_(.*)_PAR_vs_NAR\\.csv’, ‘\\1’, file_name)
+  data$cluster <- cluster_name
+    
+  return(data)
+}))
+
+# Save the merged data frame as a new CSV file
+write.csv(merged_data, file = paste0(‘/media/AnalysisTempDisk2/Wuyisha/HNM_IMMUNE/RNA/DEG_My/DEG_PAR_vs_NAR/My_Raw_DEG_allcelltype_’, group1, “_vs_”, group2,‘.csv’), row.names = FALSE)
+
+# Inspect the merged file
+head(merged_data)
+
+
+
+###################go enrichmrnt ##########################################
+deg <- read.csv('/media/AnalysisTempDisk2/Wuyisha/HNM_IMMUNE/RNA/DEG_My/DEG_PAR_vs_NAR/My_Raw_DEG_allcelltype_PAR_vs_NAR.csv')
+
+# Loop through each cell type
+for (ct in celltypes) {
+  tryCatch({
+    # Filter data for the current cell type
+    deg <- data[data$cluster == ct, ]
+    
+    # Apply DEG criteria
+    deg <- deg[deg$avg_log2FC > 0.25 & deg$p_val_adj < 0.05, ]
+    
+    # Calculate the actual number of rows needed (minimum of available rows and 300)
+    n_rows <- min(nrow(deg), 300)
+    
+    # Sort by avg_log2FC in descending order and take the top n_rows rows
+    deg <- head(deg[order(deg$avg_log2FC, decreasing = TRUE), ], n_rows)
+    
+    # Set row names to gene symbols (optional, uncomment if needed)
+    rownames(deg) <- deg$gene
+    
+    # Perform GO enrichment analysis
+    ego_ALL <- enrichGO(
+      gene = rownames(deg),
+      OrgDb = 'org.Hs.eg.db',
+      keyType = 'SYMBOL',
+      ont = "ALL",
+      pAdjustMethod = "BH",
+      pvalueCutoff = 0.1,
+      qvalueCutoff = 0.1
+    )
+    
+    # Convert results to a data frame
+    ego_all <- data.frame(ego_ALL)
+    
+    # Save the results to a CSV file
+    write.csv(ego_all, file = paste0('/media/AnalysisTempDisk2/Wuyisha/HNM_IMMUNE/RNA/DEG_My/DEG_PAR_vs_NAR/GO/', ct, "_GO_enrichment.csv"), row.names = FALSE)
+    
+    # Print progress
+    print(paste("Processed file:", ct))
+  }, error = function(e) {
+    # Print error message if something goes wrong
+    message(paste("Error processing file:", ct))
+    message(e)
+  })
+}
