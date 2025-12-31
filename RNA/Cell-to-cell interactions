@@ -1,1 +1,515 @@
+library(CellChat)
+library(patchwork)
+library(Seurat)
+options(stringsAsFactors = FALSE)
+
+setwd('/media/AnalysisTempDisk2/Wuyisha/HNM_IMMUNE/RNA/cellchat')
+
+data <- readRDS('/media/AnalysisTempDisk2/Wuyisha/HNM_IMMUNE/RNA/data/HNM_23samples_data_4_immune_cells_1.rds')
+Cells.sub <- subset(data@meta.data, group_A!="PAR")
+data_a <- subset(data, cells=row.names(Cells.sub))
+table(data_a$group_A)
+data_a
+
+
+
+NAR
+Cells.sub <- subset(data_a@meta.data, group_A==‘NAR’)
+seurat_object_nar <- subset(data_a, cells=row.names(Cells.sub))
+seurat_object_nar
+Idents(seurat_object_nar) <- seurat_object_nar$subtype
+
+# Data preparation
+data.input <- seurat_object_nar[[‘RNA’]]@data # normalised data matrix
+# For Seurat version >= ‘5.0.0’, obtain normalised data via `seurat_object[[‘RNA’]]$data`
+labels <- Idents(seurat_object_nar)
+table(Idents(seurat_object_nar))
+meta <-seurat_object_nar@meta.data
+
+
+### Create cellchat
+cellchat <- createCellChat(object = seurat_object_nar, group.by = ‘ident’, assay = ‘RNA’)
+# Add information
+cellchat <- addMeta(cellchat, meta = meta)
+# cellchat <- setIdent(cellchat, ident.use = ‘labels’) # set ‘labels’ as default cell identity
+levels(cellchat@idents) # display factor levels of cell labels
+groupSize <- as.numeric(table(cellchat@idents)) # count of cells per group
+
+
+## Set ligand-receptor interaction database
+CellChatDB <- CellChatDB.human # use CellChatDB.mouse if running on mouse data
+showDatabaseCategory(CellChatDB)
+# Display database structure
+dplyr::glimpse(CellChatDB$interaction)
+#3233
+
+# Select the entire database
+CellChatDB.use <- CellChatDB
+# CellChatDB.use <- subsetDB(CellChatDB, search = ‘Secreted Signaling’)
+# CellChatDB.use <- subsetDB(CellChatDB, search = c(‘Secreted Signaling’, ‘ECM-Receptor’, ‘Cell-Cell Contact’), key = c(‘annotation’)) 
+##Preprocess phenotypic data for intercellular communication analysis
+# set the used database in the object
+cellchat@DB <- CellChatDB.use
+
+# subset the expression data of signalling genes to save computational cost
+cellchat <- subsetData(cellchat) # This step is necessary even when using the entire database
+
+## Identify overexpressed ligands or receptors within each cell group to infer cell state-specific communication
+options(future.globals.maxSize = 2 * 1024^3)  # Set to 2GB
+future::plan(‘multisession’, workers = 4) # Perform in parallel
+
+# Inspect the dimensions of the expression matrix
+dim(cellchat@data.signaling)
+# Check the length of cell labels
+length(cellchat@meta$group_A)  # Replace with your actual grouping column name
+
+  
+  
+cellchat <- identifyOverExpressedGenes(cellchat)
+cellchat <- identifyOverExpressedInteractions(cellchat)
+#> The number of highly variable ligand-receptor pairs used for signalling inference is 2467
+ptm = Sys.time()
+execution.time = Sys.time() - ptm
+print(as.numeric(execution.time, units = ‘secs’))
+
+# Project gene expression data onto PPI (Optional: when running it, USER should set `raw.use = FALSE` in the function `computeCommunProb()` in order to use the projected data)
+# cellchat <- projectData(cellchat, PPI.human)
+
+####Inferring Intercellular Communication Networks####
+ptm = Sys.time()
+cellchat <- computeCommunProb(cellchat, type = ‘triMean’)#type, i.e. the method for calculating the average gene expression of each cell group
+cellchat <- filterCommunication(cellchat, min.cells = 10)
+
+
+## Extract inferred cell communication network as data frame
+# df.net <- subsetCommunication(cellchat) 
+# May take considerable time
+# cellchat <- computeCommunProb(cellchat, type = ‘triMean’, trim = NULL, raw.use = TRUE)
+# cellchat <- filterCommunication(cellchat, min.cells = 5)
+cellchat <- computeCommunProbPathway(cellchat)
+cellchat@net
+cellchat@netP
+
+
+# Compute aggregated cell-cell communication network
+cellchat <- aggregateNet(cellchat)
+saveRDS(cellchat, file = ‘scRNA_NAR_cellchat_Net.rds’)
+
+
+
+SAR
+Cells.sub <- subset(data_a@meta.data, group_A==‘SAR’)
+seurat_object_sar <- subset(data_a, cells=row.names(Cells.sub))
+seurat_object_sar
+Idents(seurat_object_sar) <- seurat_object_sar$subtype
+
+# Data preparation
+data.input <- seurat_object_sar[[‘RNA’]]@data # normalised data matrix
+# For Seurat version >= ‘5.0.0’, obtain normalised data via `seurat_object[[‘RNA’]]$data`
+labels <- Idents(seurat_object_sar)
+table(Idents(seurat_object_sar))
+meta <-seurat_object_sar@meta.data
+
+
+### Create cellchat
+cellchat <- createCellChat(object = seurat_object_sar, group.by = ‘ident’, assay = ‘RNA’)
+# Add information
+cellchat <- addMeta(cellchat, meta = meta)
+# cellchat <- setIdent(cellchat, ident.use = ‘labels’) # set ‘labels’ as default cell identity
+levels(cellchat@idents) # display factor levels of cell labels
+groupSize <- as.numeric(table(cellchat@idents)) # count of cells per group
+
+
+## Set ligand-receptor interaction database
+CellChatDB <- CellChatDB.human # use CellChatDB.mouse if running on mouse data
+showDatabaseCategory(CellChatDB)
+# Display database structure
+dplyr::glimpse(CellChatDB$interaction)
+#3233
+
+# Select the entire database
+CellChatDB.use <- CellChatDB
+# CellChatDB.use <- subsetDB(CellChatDB, search = ‘Secreted Signaling’)
+# CellChatDB.use <- subsetDB(CellChatDB, search = c(‘Secreted Signaling’, ‘ECM-Receptor’, ‘Cell-Cell Contact’), key = c(‘annotation’)) 
+##Preprocess phenotypic data for intercellular communication analysis
+# set the used database in the object
+cellchat@DB <- CellChatDB.use
+
+# subset the expression data of signalling genes to save computational cost
+cellchat <- subsetData(cellchat) # This step is necessary even when using the entire database
+
+## Identify overexpressed ligands or receptors within each cell group to infer cell state-specific communication
+options(future.globals.maxSize = 2 * 1024^3)  # Set to 2GB
+future::plan(‘multisession’, workers = 4) # Perform in parallel
+
+# Inspect the dimensions of the expression matrix
+dim(cellchat@data.signaling)
+# Check the length of cell labels
+length(cellchat@meta$group_A)  # Replace with your actual grouping column name
+
+  
+  
+cellchat <- identifyOverExpressedGenes(cellchat)
+cellchat <- identifyOverExpressedInteractions(cellchat)
+#> The number of highly variable ligand-receptor pairs used for signalling inference is 2467
+ptm = Sys.time()
+execution.time = Sys.time() - ptm
+print(as.numeric(execution.time, units = ‘secs’))
+
+# Project gene expression data onto PPI (Optional: when running it, USER should set `raw.use = FALSE` in the function `computeCommunProb()` in order to use the projected data)
+# cellchat <- projectData(cellchat, PPI.human)
+
+####Inferring Intercellular Communication Networks####
+ptm = Sys.time()
+cellchat <- computeCommunProb(cellchat, type = ‘triMean’)#type, i.e. the method for calculating the average gene expression of each cell group
+cellchat <- filterCommunication(cellchat, min.cells = 10)
+
+
+## Extract inferred cell communication network as data frame
+# df.net <- subsetCommunication(cellchat) 
+# May take considerable time
+# cellchat <- computeCommunProb(cellchat, type = ‘triMean’, trim = NULL, raw.use = TRUE)
+# cellchat <- filterCommunication(cellchat, min.cells = 5)
+cellchat <- computeCommunProbPathway(cellchat)
+cellchat@net
+cellchat@netP
+
+
+# Compute aggregated cell-cell communication network
+cellchat <- aggregateNet(cellchat)
+saveRDS(cellchat, file = ‘scRNA_SAR_cellchat_Net.rds’)
+
+
+
+
+MAR
+Cells.sub <- subset(data_a@meta.data, group_A==‘MAR’)
+seurat_object_mar <- subset(data_a, cells=row.names(Cells.sub))
+seurat_object_mar
+Idents(seurat_object_mar) <- seurat_object_mar$subtype
+
+# Data preparation
+data.input <- seurat_object_mar[[‘RNA’]]@data # normalised data matrix
+# For Seurat version >= ‘5.0.0’, obtain normalised data via `seurat_object[[‘RNA’]]$data`
+labels <- Idents(seurat_object_mar)
+table(Idents(seurat_object_mar))
+meta <-seurat_object_mar@meta.data
+
+
+### Create cellchat
+cellchat <- createCellChat(object = seurat_object_mar, group.by = ‘ident’, assay = ‘RNA’)
+# Add information
+cellchat <- addMeta(cellchat, meta = meta)
+# cellchat <- setIdent(cellchat, ident.use = ‘labels’) # set ‘labels’ as default cell identity
+levels(cellchat@idents) # display factor levels of cell labels
+groupSize <- as.numeric(table(cellchat@idents)) # count of cells per group
+
+
+## Set ligand-receptor interaction database
+CellChatDB <- CellChatDB.human # use CellChatDB.mouse if running on mouse data
+showDatabaseCategory(CellChatDB)
+# Display database structure
+dplyr::glimpse(CellChatDB$interaction)
+#3233
+
+# Select the entire database
+CellChatDB.use <- CellChatDB
+# CellChatDB.use <- subsetDB(CellChatDB, search = ‘Secreted Signaling’)
+# CellChatDB.use <- subsetDB(CellChatDB, search = c(‘Secreted Signaling’, ‘ECM-Receptor’, ‘Cell-Cell Contact’), key = c(‘annotation’)) 
+##Preprocess phenotypic data for intercellular communication analysis
+# set the used database in the object
+cellchat@DB <- CellChatDB.use
+
+# subset the expression data of signalling genes to save computational cost
+cellchat <- subsetData(cellchat) # This step is necessary even when using the entire database
+
+## Identify overexpressed ligands or receptors within each cell group to infer cell state-specific communication
+options(future.globals.maxSize = 2 * 1024^3)  # Set to 2GB
+future::plan(‘multisession’, workers = 4) # Perform in parallel
+
+# Inspect the dimensions of the expression matrix
+dim(cellchat@data.signaling)
+# Check the length of cell labels
+length(cellchat@meta$group_A)  # Replace with your actual grouping column name
+
+  
+  
+cellchat <- identifyOverExpressedGenes(cellchat)
+cellchat <- identifyOverExpressedInteractions(cellchat)
+#> The number of highly variable ligand-receptor pairs used for signalling inference is 2467
+ptm = Sys.time()
+execution.time = Sys.time() - ptm
+print(as.numeric(execution.time, units = ‘secs’))
+
+# Project gene expression data onto PPI (Optional: when running it, USER should set `raw.use = FALSE` in the function `computeCommunProb()` in order to use the projected data)
+# cellchat <- projectData(cellchat, PPI.human)
+
+####Inferring Intercellular Communication Networks####
+ptm = Sys.time()
+cellchat <- computeCommunProb(cellchat, type = ‘triMean’)#type, i.e. the method for calculating the average gene expression of each cell group
+cellchat <- filterCommunication(cellchat, min.cells = 10)
+
+
+## Extract inferred cell communication network as data frame
+# df.net <- subsetCommunication(cellchat) 
+# May take considerable time
+# cellchat <- computeCommunProb(cellchat, type = ‘triMean’, trim = NULL, raw.use = TRUE)
+# cellchat <- filterCommunication(cellchat, min.cells = 5)
+cellchat <- computeCommunProbPathway(cellchat)
+cellchat@net
+cellchat@netP
+
+
+# Compute aggregated cell-cell communication network
+cellchat <- aggregateNet(cellchat)
+saveRDS(cellchat, file = ‘scRNA_MAR_cellchat_Net.rds’)
+
+
+
+
+
+
+
+
+
+
+
+library(CellChat)
+library(patchwork)
+library(Seurat)
+library(purrr)   # Load once
+library(ggpubr)  
+library(cowplot)
+library(dplyr)   # Bring dplyr along for the ride
+options(stringsAsFactors = FALSE)
+
+setwd(“/media/AnalysisTempDisk2/Wuyisha/HNM_IMMUNE/RNA/cellchat”)
+
+cellchat_NAR <- readRDS(“scRNA_NAR_cellchat_Net.rds”)
+cellchat_SAR <- readRDS(“scRNA_SAR_cellchat_Net.rds”)
+cellchat_MAR <- readRDS(“scRNA_MAR_cellchat_Net.rds”)
+
+
+cellchat_list <- c(cellchat_NAR, cellchat_SAR, cellchat_MAR)
+names(cellchat_list) <- c(“NAR”, ‘SAR’, ‘MAR’)
+uterus_cellchat <- mergeCellChat(cellchat_list, add.names = names(cellchat_list))
+
+
+
+
+############ Myeloid cell related plot#######################
+################Antigen presentation ################
+pathways.want <- c(‘MHC-II’, “CD86”,
+                  )   #“ANNEXIN”,
+
+## 2. Extract all L-R pairs for each pathway sequentially, adding a column to tag the pathway
+lr_all <- map_dfr(pathways.want,
+                  ~ extractEnrichedLR(uterus_cellchat,
+                                      signaling = .x,
+                                      geneLR.return = FALSE) %>%
+                    mutate(Pathway = .x))
+
+## 3. Plot the overall bubble diagram in one go
+p_joint <- netVisual_bubble(uterus_cellchat,
+                            pairLR.use   = lr_all,
+                            # remove.isolate = TRUE,
+                             targets.use =c(‘CD4_Trm’,“CD4_Th1”,‘CD8_Trm’),                  
+                   sources.use= c(‘Macro_CCL3’,“CD14_Mo”), 
+                            angle.x = 90,
+                            comparison = c(1,2,3) , dot.size.min = 1, dot.size.max = 4,
+                 colour.text = c(‘#a8a9cb’, ‘#f3b669’, ‘#f08c3c’))
+
+p_joint
+## 4. Save
+ggsave(‘./Fig/myeloid/multi_pathway_all_LRpairs_bubble_macro_CCL3_agence.pdf’, p_joint, width = 6, height = 4.5)
+
+
+
+
+
+######################################Chemokine#########################3
+pathways.want <- c(
+                  “ADGRE”,'CXCL',“CCL”,'ANNEXIN',“PLAU”) 
+
+## 2. Extract all L-R pairs for each pathway sequentially, adding a column to label the pathway
+lr_all <- map_dfr(pathways.want,
+                  ~ extractEnrichedLR(uterus_cellchat,
+                                      signaling = .x,
+                                      geneLR.return = FALSE) %>%
+                    mutate(Pathway = .x))
+
+## 3. Plot the overall bubble diagram in one go
+p_joint <- netVisual_bubble(uterus_cellchat,
+                            pairLR.use   = lr_all,
+                            # remove.isolate = TRUE,
+                             targets.use = c(‘CD4_Trm’,“CD4_Th1”,‘CD8_Trm’,“pDC”,'CD14_Mo',“Macro_CCL3”),                  
+                   sources.use = c(‘Macro_CCL3’,“CD14_Mo”), 
+                            angle.x = 90,
+                            comparison = c(1,2,3),
+                dot.size.min = 1, dot.size.max = 4,
+                 colour.text = c(‘#a8a9cb’, ‘#f3b669’, ‘#f08c3c’))
+
+p_joint
+## 4. Save
+ggsave('./Fig/myeloid/multi_pathway_all_LRpairs_bubble_macro_CCL3_inflammation.pdf', p_joint, width = 10, height = 8)
+
+
+
+
+####################Weight ###################################
+## 1. Calculate the global maximum weight (or count)
+ew.max <- max(cellchat_NAR@net$weight[cellchat_NAR@net$weight>0],
+              cellchat_SAR@net$weight[cellchat_SAR@net$weight>0],
+              cellchat_MAR@net$weight[cellchat_MAR@net$weight>0])
+
+## 2. Calculate the global maximum vertex weight (optional)
+vw.max <- max(cellchat_NAR@net$count[cellchat_NAR@net$count>0],
+              cellchat_SAR@net$count[cellchat_SAR@net$count>0],
+              cellchat_MAR@net$count[cellchat_MAR@net$count>0])
+
+################Antigen presentation ################
+
+## 3. 固定细胞顺序（chord/circle 必备）
+# cell.ord <- levels(cc1@idents)   # 或你自己定义的固定向量
+
+## 4. 画图——两个对象用 **完全一样的参数**
+p1 <- netVisual_aggregate(cellchat_NAR,
+                          signaling        =  c("MHC-II",'CD80') ,
+                          layout           = "circle",
+                          # color.use        = cell.col,
+                          edge.weight.max  = ew.max/10,
+                          edge.width.max   = 3,      # 像素上限
+                          vertex.weight    = vw.max,
+                          vertex.size.max  = 5,
+                          sources.use = c('Macro_CCL3'),
+                          # cell.order       = cell.ord,
+                          top              = 0.2,
+                          thresh           = 0.05)
+
+p2 <- netVisual_aggregate(cellchat_SAR,
+                          signaling        =  c("MHC-II",'CD80') ,
+                          layout           = "circle",
+                          # color.use        = cell.col,
+                          edge.weight.max  = ew.max/10,
+                          edge.width.max   = 3,
+                          vertex.weight    = vw.max,
+                          vertex.size.max  = 5,
+                          sources.use = c('Macro_CCL3'),
+                        
+                          # cell.order       = cell.ord,
+                          top              = 0.2,
+                          thresh           = 0.05)
+
+p3 <- netVisual_aggregate(cellchat_MAR,
+                          signaling        =  c("MHC-II",'CD80') ,
+                          layout           = "circle",
+                          # color.use        = cell.col,
+                          edge.weight.max  = ew.max/10,
+                          edge.width.max   = 3,
+                          vertex.weight    = vw.max,
+                          vertex.size.max  = 5,
+                          sources.use =  c('Macro_CCL3'),
+                          
+                          # cell.order       = cell.ord,
+                          top              = 0.2,
+                          thresh           = 0.05)
+
+
+
+pdf("NAR_MHC-II_CD80_cell-cell_communication_network_circle.pdf",width = 8,height = 8)
+print(p1) 
+dev.off()
+
+pdf("SAR_MHC-II_CD80_cell-cell_communication_network_circle.pdf",width = 8,height = 8)
+print(p2)
+dev.off()
+
+
+pdf("MAR_MHC-II_CD80_cell-cell_communication_network_circle.pdf",width = 8,height = 8)
+print(p3)
+dev.off()
+
+
+
+
+
+
+
+
+
+
+
+
+######################################Chemokine#########################3
+## 0. 预备：统一颜色
+# cell.col <- c("Fibroblast"="#1f77b4", "Macrophage"="#ff7f0e", "T.cell"="#2ca02c")
+
+## 1. 计算全局最大 weight（或 count）
+ew.max <- max(cellchat_NAR@net$weight[cellchat_NAR@net$weight>0],
+              cellchat_SAR@net$weight[cellchat_SAR@net$weight>0],
+              cellchat_MAR@net$weight[cellchat_MAR@net$weight>0])
+
+## 2. 计算全局最大 vertex weight（可选）
+vw.max <- max(cellchat_NAR@net$count[cellchat_NAR@net$count>0],
+              cellchat_SAR@net$count[cellchat_SAR@net$count>0],
+              cellchat_MAR@net$count[cellchat_MAR@net$count>0])
+
+## 3. 固定细胞顺序（chord/circle 必备）
+# cell.ord <- levels(cc1@idents)   # 或你自己定义的固定向量
+
+## 4. 画图——两个对象用 **完全一样的参数**
+p1 <- netVisual_aggregate(cellchat_NAR,
+                          signaling        =  c('ADGRE','CXCL','CCL','ANNEXIN','PLAU') ,
+                          layout           = "circle",
+                          # color.use        = cell.col,
+                          edge.weight.max  = ew.max/20,
+                          edge.width.max   = 3,      # 像素上限
+                          vertex.weight    = vw.max,
+                          vertex.size.max  = 5,
+                          sources.use = c('Macro_CCL3','CD14_Mo'),
+                          # cell.order       = cell.ord,
+                          top              = 0.2,
+                          thresh           = 0.05)
+
+p2 <- netVisual_aggregate(cellchat_SAR,
+                          signaling        =  c('ADGRE','CXCL','CCL','ANNEXIN','PLAU') ,
+                          layout           = "circle",
+                          # color.use        = cell.col,
+                          edge.weight.max  = ew.max/20,
+                          edge.width.max   = 3,
+                          vertex.weight    = vw.max,
+                          vertex.size.max  = 5,
+                          sources.use = c('Macro_CCL3','CD14_Mo'),
+                        
+                          # cell.order       = cell.ord,
+                          top              = 0.2,
+                          thresh           = 0.05)
+
+p3 <- netVisual_aggregate(cellchat_MAR,
+                          signaling        =  c('ADGRE','CXCL','CCL','ANNEXIN','PLAU') ,
+                          layout           = "circle",
+                          # color.use        = cell.col,
+                          edge.weight.max  = ew.max/20,
+                          edge.width.max   = 3,
+                          vertex.weight    = vw.max,
+                          vertex.size.max  = 5,
+                          sources.use =  c('Macro_CCL3','CD14_Mo'),
+                          
+                          # cell.order       = cell.ord,
+                          top              = 0.2,
+                          thresh           = 0.05)
+## 1. NAR
+pdf("NAR_MO-circle.pdf", width = 8, height = 8)
+print(p1)          # 或直接 netVisual_aggregate(...) 在这里写一行
+dev.off()
+
+## 2. SAR
+pdf("SAR_MO-circle.pdf", width = 8, height = 8)
+print(p2)
+dev.off()
+
+## 3. MAR
+pdf("MAR_MO-circle.pdf", width = 8, height = 8)
+print(p3)
+dev.off()
 
