@@ -5,3 +5,127 @@ library(ggbeeswarm)
 library(dplyr)
 library(ggpubr) 
 getwd()
+
+
+meta <- read.csv('/media/AnalysisTempDisk2/Wuyisha/HNM_IMMUNE/RNA/data/meta.data.csv')
+rownames(meta) <- meta$sample
+meta_filter <- meta[meta$VAS_score != "PAR", ]
+
+
+
+# Load necessary libraries
+library(ggplot2)
+library(ggbeeswarm)
+library(ggsignif)
+library(dplyr)
+library(patchwork)
+
+# Ensure group_A is a factor type and set correct levels
+meta_filter$group_A <- factor(meta_filter$group_A, levels = c(‘NAR’, “SAR”, ‘MAR’))
+
+# Define colours
+col <- c(‘NAR’ = ‘#a8a9cb’, ‘SAR’ = ‘#f3b669’, “MAR” = ‘#f08c3c’)
+
+# Filter required groups
+his_cell_num <- meta_filter %>%
+  filter(group_A %in% c(‘NAR’, “SAR”, ‘MAR’))
+
+# Define pairwise comparison combinations
+my_comparisons <- list(c(‘NAR’, ‘SAR’), c(‘SAR’, ‘MAR’), c(“NAR”, ‘MAR’))
+
+
+
+#############Total_IgE#######################
+ p <- his_cell_num %>%
+  ggplot(aes(y = Total_IgE, x = group_A, colour = group_A)) +
+  geom_boxplot(width = 0.5, outlier.shape = NA,
+               size = 1, colour = ‘#3e3a39’) +
+  geom_quasirandom(size = 4, width = 0.15,
+                   alpha = 0.9, stroke = 0.4) +
+  stat_compare_means(
+    comparisons = my_comparisons,
+    label       = ‘p.format’
+  ) +
+  theme_classic() +
+  theme(
+    axis.title.y   = element_text(size = 12),
+    axis.text.y    = element_text(size = 12),
+    axis.text.x    = element_text(angle = 60, size = 12, hjust = 1, vjust = 1),
+    strip.background = element_rect(colour = ‘white’),
+    axis.ticks     = element_line(size = 0.5)
+  ) +
+  scale_fill_manual(values = col) +
+  scale_colour_manual(values = col) +
+  ylab(‘Total IgE (kU/L)’) +
+  xlab(‘’) +
+  ggtitle(‘’)
+
+# Save plot to file
+ggsave(‘Total_IgE_by_group_A.pdf’, plot = p, width = 5, height = 4)
+# ggsave(‘Total_IgE_by_group_A.pdf.tiff’, plot = p, width = 5, height = 6, dpi = 300)
+
+
+
+
+
+#############EOS_Count#######################
+p <- his_cell_num %>%
+  ggplot(aes(y = EOS_Count, x = group_A, colour = group_A)) +
+ geom_boxplot(width = 0.5, outlier.shape = NA,
+               size = 1, color = "#3e3a39") +
+  geom_quasirandom(size =4, width = 0.15,
+                   alpha = 0.9, stroke = 0.4) +
+  stat_compare_means(
+    comparisons = my_comparisons,
+    label       = "p.format"
+  ) +
+  theme_classic() +
+  theme(
+    axis.title.y   = element_text(size = 12),
+    axis.text.y    = element_text(size = 12),
+    axis.text.x    = element_text(angle = 60, size = 12, hjust = 1, vjust = 1),
+    strip.background = element_rect(colour = "white"),
+    axis.ticks     = element_line(size = 0.5)
+  ) +
+  scale_fill_manual(values = col) +
+  scale_colour_manual(values = col) +
+  ylab("EOS Count") +
+  xlab("") +
+  ggtitle("")
+
+
+ggsave("EOS_Count_by_group_A.pdf", plot = p, width = 5, height = 4, dpi = 300)
+# ggsave("EOS_Count_by_group_A.pdf.tiff", plot = p, width = 5, height = 6, dpi = 300)
+
+
+
+#############VAS_score#######################
+ p <- his_cell_num %>%
+  ggplot(aes(y = VAS_score, x = group_A, colour = group_A)) +
+ geom_boxplot(width = 0.5, outlier.shape = NA,
+               size = 1, color = "#3e3a39") +
+  geom_quasirandom(size =4, width = 0.15,
+                   alpha = 0.9, stroke = 0.4) +
+  stat_compare_means(
+    comparisons = my_comparisons,
+    label       = "p.format"
+  ) +
+  stat_compare_means(
+    comparisons = my_comparisons,
+    label       = "p.format"
+  ) +
+  theme_classic() +
+  theme(
+    axis.title.y   = element_text(size = 12),
+    axis.text.y    = element_text(size = 12),
+    axis.text.x    = element_text(angle = 60, size = 12, hjust = 1, vjust = 1),
+    strip.background = element_rect(colour = "white"),
+    axis.ticks     = element_line(size = 0.5)
+  ) +
+  scale_fill_manual(values = col) +
+  scale_colour_manual(values = col) +
+  ylab("VAS Score") +
+  xlab("") +
+  ggtitle("")
+
+ggsave("VAS_score_by_group_A.pdf", plot = p, width = 5, height = 4, dpi = 300)
