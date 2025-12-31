@@ -1,0 +1,181 @@
+getwd()
+
+library(Seurat)
+library(dplyr)
+library(Matrix)
+library(ggplot2)
+library(ggrepel)
+library(ggrastr)
+
+CD4 <- readRDS(‘/media/AnalysisTempDisk2/Wuyisha/HNM_IMMUNE/RNA/data/data_Myeloid.rds’)
+table (CD4$celltype)
+
+Cells.sub <- subset(CD4@meta.data, celltype==‘Macro_CCL3’)
+# Cells.sub <- subset(CD4@meta.data, celltype==‘CD14_Mo’)
+CD4_Trm <- subset(CD4, cells=row.names(Cells.sub))
+
+CD4_Trm
+
+table(CD4_Trm$group_A)
+
+Cells.sub <- subset(CD4_Trm@meta.data, group_A!=‘PAR’)
+CD4_Trm <- subset(CD4_Trm, cells=row.names(Cells.sub))
+CD4_Trm
+
+Mφ_Proinflammatory = c(
+    ‘IL23’, ‘TNF’, ‘CXCL9’, ‘CXCL10’, “CXCL11”, ‘CD86’ ,
+    ‘IL1A’, ‘IL1B’, ‘IL6’, ‘CCL5’, ‘IRF5’, ‘IRF1’, ‘CD40’, “IDO1”, ‘KYNU’
+  )
+
+CD4_Trm <- AddModuleScore(object = CD4_Trm, features = list(Mφ_Proinflammatory), name = “Mφ_Proinflammatory”)
+colnames(CD4_Trm@meta.data)
+
+Mφ_Immunoregulatory = c(
+    ‘ARG1’, ‘ARG2’, ‘IL10’, ‘CD32’, “CD163”, ‘CD23’,
+    ‘CD200R1’, ‘PDCD1LG2’, ‘MARCO’, “CSF1R”, ‘CD206’,
+    ‘IL1RN’, ‘IL1R2’, ‘IL4R’, ‘CCR7’, “CCL4”, ‘CCL13’,
+    ‘CCL20’, ‘CCL17’, ‘CCL18’, “CCL22”, ‘CCL24’,
+    ‘LYVE1’, ‘VEGFA’, ‘VEGFB’, ‘VEGFC’, “VEGFD”, ‘EGF’,
+    ‘CTSA’, ‘CTSB’, ‘CSTC’, ‘CTSD’, ‘TGFB1’, “TGFB2”, ‘TGFB3’,
+    ‘MMP14’, ‘MMP19’, ‘MMP9’, ‘CLEC7A’, “WNT7B”, ‘FASL’,
+    ‘TNFSF12’, ‘TNFSF8’, ‘CD276’, ‘VTCN1’, “MSR1”, ‘FN1’
+  )
+
+CD4_Trm <- AddModuleScore(object = CD4_Trm, features = list(Mφ_Immunoregulatory), name = “Mφ_Immunoregulatory”)
+
+colnames(CD4_Trm@meta.data)
+
+
+
+
+
+####Graph Plotting
+library(dplyr)
+CD4_Trm$Cell <- rownames(CD4_Trm@meta.data)
+
+# Assuming data is your Seurat object containing the meta.data data frame
+Ratio_Sample <- CD4_Trm@meta.data %>%
+  select(Cell = Cell, group_A, `Mφ_Proinflammatory1`, `Mφ_Immunoregulatory1`)
+
+
+# Convert group_A to a factor, retaining only AR and NAR levels
+Ratio_Sample$group_A <- factor(Ratio_Sample$group_A, levels = c(‘NAR’, ‘SAR’, “MAR”))
+
+# Define colour mapping, retaining only AR and NAR colours
+# col <- c(‘NAR’ = ‘#a4c9dd’, “AR” = ‘#549c54’)
+col <- c(‘NAR’ = ‘#869C83’, ‘SAR’ = ‘#d8cd59’, “MAR” = ‘#eee934’)
+# Filter data to retain only AR and NAR entries
+his_cell_num <- Ratio_Sample %>% 
+  filter(group_A %in% c(‘NAR’, ‘SAR’,“MAR”))
+
+# Define pairwise comparison combinations, comparing only NAR and AR
+my_comparisons <- list(c(‘NAR’, ‘MAR’), c(‘NAR’, ‘SAR’), c(“SAR”, ‘MAR’))
+
+
+####Bar Chart####
+# Specify colours
+group.colour = c(‘NAR’ = ‘#869C83’, ‘SAR’ = ‘#d8cd59’, “MAR” = ‘#eee934’)
+
+library(ggpubr)
+library(dplyr)
+library(ggpubr)
+library(dplyr)
+
+# Assuming the Cellratio data frame exists and contains columns celltype, group, Ratio
+# Assuming group.color has been defined
+
+# Define comparisons.list
+comparisons.list <- list(c(‘NAR’, ‘MAR’), c(‘NAR’, ‘SAR’), c(“SAR”, ‘MAR’))
+
+p.list.perMcls <- lapply(unique(sort(his_cell_num$group_A)), function(mcls) {
+  
+  text.size = 10
+  text.angle = 45
+  text.hjust = 1
+  legend.position = ‘none’
+  
+  # Filter data using dplyr
+  filtered_data <- his_cell_num %>% filter(group_A == mcls)
+  
+  p <- ggboxplot(filtered_data, x = ‘group_A’, y = ‘Mφ_Immunoregulatory1’,
+                 colour = ‘group_A’, legend = ‘none’, title = mcls,
+                 xlab = ‘’, ylab = ‘frequency’,
+                 add = ‘jitter’, outlier.shape = NA) +
+    scale_color_manual(values = group.color) +
+    # Significance comparison using non-parametric t-test (Wilcoxon signed-rank test)
+    stat_compare_means(label = ‘p.format’, comparisons = comparisons.list, method = ‘wilcox.test’) +
+    coord_cartesian(clip = ‘off’) + # Allows plot elements to remain visible beyond axis boundaries
+    theme(plot.title = element_text(size = text.size + 2, colour = ‘black’, hjust = 0.5),
+          axis.ticks = element_line(colour = ‘black’),
+          axis.title = element_text(size = text.size, colour = ‘black’), 
+          axis.text = element_text(size = text.size, colour = ‘black’),
+          axis.text.x = element_text(angle = text.angle, hjust = text.hjust),
+          legend.position = legend.position,
+          legend.text = element_text(size = text.size),
+          legend.title = element_text(size = text.size),
+          strip.background = element_rect(colour = ‘black’, size = 1, linetype = ‘solid’))
+  
+  return(p)
+})
+# Print or save the plot list
+# print(p.list.perMcls)
+
+library(patchwork)
+wrap_plots(p.list.perMcls, ncol = 4)
+
+
+library(dplyr)
+library(ggpubr)
+library(patchwork)
+
+CD4_Trm$Cell <- rownames(CD4_Trm@meta.data)
+
+Ratio_Sample <- CD4_Trm@meta.data %>%
+  select(Cell, group_A, Mφ_Proinflammatory1, Mφ_Immunoregulatory1) %>%
+  mutate(group_A = factor(group_A, levels = c(‘NAR’, “SAR”, ‘MAR’)))
+
+group.colour <- c(‘NAR’ = ‘#869C83’, ‘SAR’ = ‘#d8cd59’, “MAR” = ‘#eee934’)
+comparisons.list <- list(c(‘NAR’, ‘MAR’), c(‘NAR’, ‘SAR’), c(“SAR”, ‘MAR’))
+
+p.list <- lapply(c(‘Mφ_Proinflammatory1’, ‘Mφ_Immunoregulatory1’), function(var) {
+  ggboxplot(Ratio_Sample, x = ‘group_A’, y = var,
+            colour = ‘group_A’, legend = ‘none’,
+            add = ‘jitter’, outlier.shape = NA) +
+    scale_color_manual(values = group.color) +
+    stat_compare_means(comparisons = comparisons.list, method = ‘wilcox.test’) +
+    theme_minimal(base_size = 10) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+})
+
+final_plot <- wrap_plots(p.list, ncol = 2)   # You only have 2 plots, so ncol=2 suffices
+print(final_plot)
+
+# Save
+ggsave(‘Macro_CCL3_Mφ_scores.pdf’, final_plot, width = 8, height = 4)
+
+
+
+
+
+# Generate table of adjusted P-values
+p_value_table <- lapply(c(‘Mφ_Proinflammatory1’, ‘Mφ_Immunoregulatory1’), function(var) {
+  # Perform pairwise comparisons using pairwise.wilcox.test and adjust P-values
+  p_test <- pairwise.wilcox.test(Ratio_Sample[[var]], Ratio_Sample$group_A, p.adjust.method = ‘BH’, paired = FALSE)  
+  
+  # Extract adjusted P-values  
+  p_adj <- as.data.frame(p_test$p.value)
+  
+  # Add variable name column
+  p_adj$Variable <- var
+  
+  return(p_adj)
+})
+
+# Combine adjusted P-values for all variables into a single table
+p_value_table <- bind_rows(p_value_table)
+
+
+# Print adjusted P-value table
+print(p_value_table)
+
+
