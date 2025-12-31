@@ -155,7 +155,208 @@ data=merge(x=data_list[[1]],
            y=data_list[-1])
 
 
-saveRDS(data_list, "HNM_23samples_list.rds")
-saveRDS(data, "HNM_23samples_data.rds")
+saveRDS(data_list, "HNM_24samples_list.rds")
+saveRDS(data, "HNM_24samples_data.rds")
 
 data
+
+
+
+
+
+
+######################################## anno ####################################
+rm(list=ls())
+library(stringr)
+library(Seurat)
+library(ggplot2)
+# library(devtools)
+#library(clustree)
+library(cowplot)
+library(dplyr)
+# library(DoubletFinder)
+
+getwd()
+
+data <- readRDS("/media/AnalysisTempDisk2/Wuyisha/HNM_IMMUNE/RNA/HNM_24samples_data.rds")
+data
+unique(data$orig.ident)
+data$sample <- data$orig.ident
+
+
+data$sample <- ifelse(
+  grepl("^AR", data$sample), 
+  sub("_(.*)", "", data$sample),  
+  data$sample  
+)
+table(data$sample)
+
+
+Cells.sub <- subset(data@meta.data, sample!="AR18")
+data <- subset(data, cells=row.names(Cells.sub))
+saveRDS(data, "/media/AnalysisTempDisk2/Wuyisha/HNM_IMMUNE/RNA/HNM_23samples_data.rds")
+
+
+selected_genes <- rownames(data) %>%
+  grepl("^RPS|^RPL|^MT-|^LINC|^HSP|^DNAJ|^CCT|-AS$|\\.", x = .)
+
+filtered_genes <- rownames(data)[selected_genes]
+cat("Number of filtered genes:", length(filtered_genes), "\n")
+# cat("Filtered genes:\n", filtered_genes, "\n", sep = "")
+
+seurat_gene_names <- rownames(data)
+genes_to_remove <- seurat_gene_names %in% filtered_genes  
+data <- data[!genes_to_remove, ] 
+
+cat("Seurat object has been filtered. Number of genes retained:", sum(!genes_to_remove), "\n")
+print(data)
+
+## NormalizeData
+data<- NormalizeData(data)
+data <- FindVariableFeatures(data, selection.method = "vst", nfeatures = 3000)
+
+data <- ScaleData(data)
+data <- RunPCA(data,verbose=FALSE)
+
+# How many PCs to include?
+ElbowPlot(data, ndims=50)
+# best_pcs_immune.ref <- get_pcs(immune.ref)
+
+data <- RunUMAP(data, reduction = "pca", dims = 1:30,,verbose=FALSE)
+DimPlot(data, reduction = "umap",group.by="orig.ident",raster=FALSE)
+
+####batch correction----
+library(harmony)
+data1 <- RunHarmony(data, dims = 1:30,"orig.ident",verbose = FALSE)
+#Merged_Seurat_Rescaled=Merged_Seurat_Rescaled %>%
+#RunHarmony(c(“orig.ident”), plot_convergence = TRUE, reduction = “pca” , verbose = TRUE , #dims.use= 1:30 )
+data1 <- RunUMAP(data1,reduction = "harmony", dims = 1:30)
+DimPlot(data1, reduction = "umap", group.by = "orig.ident", raster = FALSE) + theme(legend.position = "right")
+
+colnames(data@meta.data)
+
+
+
+data1 <- FindNeighbors(data1, reduction = "harmony",  dims = 1:30) 
+for (res in c( 0.1, 0.2, 0.3, 0.5,0.8,1)) {
+  data1=FindClusters(data1, #graph.name = "CCA_snn", 
+                     resolution = res, algorithm = 1)
+}
+colnames(data1@meta.data)
+
+
+
+p1_dim=plot_grid(ncol = 3, DimPlot(data1, reduction = "umap", group.by = "RNA_snn_res.0.1",raster=FALSE) + 
+                   ggtitle("louvain_0.1"), DimPlot(data1, reduction = "umap", group.by = "RNA_snn_res.0.3",raster=FALSE) + 
+                   ggtitle("louvain_0.3"), DimPlot(data1, reduction = "umap", group.by = "RNA_snn_res.0.5",raster=FALSE) + 
+                   ggtitle("louvain_0.5"))
+p1_dim
+ggsave('umap_by_celltype.RNA_snn_res.pdf',width = 13,height = 4)
+
+library(clustree)
+
+clustree(data1@meta.data, prefix = "RNA_snn_res.")
+ggsave('clustree_by_celltype.RNA_snn_res.pdf',width = 8,height = 8)
+
+DimPlot(data1, group.by = "RNA_snn_res.0.3", label = T, raster=FALSE) 
+
+genes_to_check = c( 'CD3D', 'CD3E',  # T cells,
+                    'NKG7','GNLY', # natural killer (NK) cells "KLRB1",
+                    'MS4A1', 'CD79A',#B cells
+                    "MZB1","IGHG2",#Plasma
+                    'CD68', 'CD163', 'CD14',#my
+                    'TPSAB1',"CD69",#mast
+                    "HBB",#RBC
+                    "PPBP",#PLT
+                    "EPCAM",#epi
+                    'PECAM1','ACKR1', #endo
+                    'KRT5','KRT15','TP63',#BASAL
+                    'FOXJ1','PIFO','CAPS',#ciliated 
+                   'CDC20B', 'PLK4', 'CCNO', #dEU
+                   'TFF3','MUC5AC','TFF1','SPDEF','MUC5B',#globlet
+                    'LYPD2','SCGB1A1','SCGB3A1',#CLUB
+                    'TFCP2L1','ASCL3', 'CLCNKB' , #Ionocytes'IGF1','OXI1', 
+                    'LTF','LYZ', #glandular
+                    "CLDN4","KRT19","S100A6",#api
+                   'MYLK', 'GEM', 'EPAS1', #suprabasal
+                    "MYH11",'ACTG2','MUSTN1', #myofibro
+                   "PDGFRA",'LUM',#fibro
+                   'CDH19', 'S100B', 'SCN7A', #Glia
+                    'MKI67','STMN1','TOP2A')  #
+
+DotPlot(data1, features = genes_to_check, group.by = "RNA_snn_res.0.3",
+        assay='RNA'  )  + coord_flip()
+ggsave('Dotplot.pdf',width = 8,height = 13)
+saveRDS(data1, "/media/AnalysisTempDisk2/Wuyisha/HNM_IMMUNE/RNA/HNM_23samples_data_1.rds" )
+
+
+
+
+
+data.markers <- FindAllMarkers(object = data1, logfc.threshold = 0, group.by = "RNA_snn_res.0.3")
+write.csv(data.markers, "./anno/all.markers_wilcox.csv", row.names = F)
+
+all_markers1 = data.markers %>% 
+  dplyr::select(gene,everything()) %>% 
+  dplyr::filter(p_val<0.05)
+top80 = all_markers1 %>% group_by(cluster) %>% top_n(n = 80, wt = avg_log2FC)
+
+write.csv(all_markers1, "./anno/all.markers1_wilcox_sig.csv", row.names = F)
+write.csv(top80, "./anno/res0.3_top80_wilcox_sig.csv", row.names = F)
+
+
+
+celltype=data.frame(ClusterID=0:19,
+                    celltype= 0:19) 
+celltype[celltype$ClusterID %in% c(0),2]='T cells'  
+celltype[celltype$ClusterID %in% c(1),2]='Apical cells' 
+celltype[celltype$ClusterID %in% c(2),2]='Endothelial  cells'
+celltype[celltype$ClusterID %in% c(3),2]='Fibroblast'
+celltype[celltype$ClusterID %in% c(4),2]='Secretory  cells'
+celltype[celltype$ClusterID %in% c(5),2]='Basal cells'
+celltype[celltype$ClusterID %in% c(6),2]='Myofiboblast'
+celltype[celltype$ClusterID %in% c(7),2]='Ciliated_1'
+celltype[celltype$ClusterID %in% c(8),2]='Mo/Dc cells' 
+celltype[celltype$ClusterID %in% c(9),2]='B cells'
+celltype[celltype$ClusterID %in% c(11),2]='Glandular cells'
+celltype[celltype$ClusterID %in% c(12),2]='Prolifering cells'
+celltype[celltype$ClusterID %in% c(13),2]='Ionocytes'
+celltype[celltype$ClusterID %in% c(14),2]='Mast cells'
+celltype[celltype$ClusterID %in% c(15),2]='Plasma'
+celltype[celltype$ClusterID %in% c(16),2]='Glia'
+celltype[celltype$ClusterID %in% c(19),2]='Ciliated_2'
+
+
+table(celltype$celltype)
+
+data2@meta.data$celltype = "NA"
+for(i in 1:nrow(celltype)){
+  data2@meta.data[which(data2@meta.data$RNA_snn_res.0.3      
+== celltype$ClusterID[i]),'celltype'] <- celltype$celltype[i]}
+table(data2@meta.data$celltype)
+
+th=theme(axis.text.x = element_text(angle = 45, 
+                                    vjust = 0.5, hjust=0.5)) 
+
+
+
+p_umap=DimPlot(data2, reduction = "umap", group.by = "celltype",label = T,label.box = F,raster=FALSE)
+p_umap
+p_all_markers+p_umap
+ggsave('./anno/_umap_by_celltype_2.pdf',width = 13,height = 8)
+
+
+.........
+Cells.sub <- subset(data5@meta.data, celltype %in% c( "B_cells", "Plasma"))
+sub_B <- subset(data5, cells=row.names(Cells.sub))
+saveRDS(sub_B, "/media/AnalysisTempDisk2/Wuyisha/HNM_IMMUNE/RNA/data/HNM_23samples_data_B.rds" )
+
+Cells.sub <- subset(data5@meta.data, celltype=="T_cells")
+sub_T <- subset(data5, cells=row.names(Cells.sub))
+saveRDS(sub_T, "/media/AnalysisTempDisk2/Wuyisha/HNM_IMMUNE/RNA/data/HNM_23samples_data_T.rds" )
+
+Cells.sub <- subset(data5@meta.data, celltype %in% c("Mo/Dc_cells", "Mast_cells", "pDC"))
+sub_my <- subset(data5, cells = row.names(Cells.sub))	
+saveRDS(sub_my, "/media/AnalysisTempDisk2/Wuyisha/HNM_IMMUNE/RNA/data/HNM_23samples_data_my.rds" )
+
+
