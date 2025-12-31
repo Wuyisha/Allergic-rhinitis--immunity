@@ -1,1 +1,161 @@
 
+rm(list=ls())
+library(stringr)
+library(Seurat)
+library(ggplot2)
+# library(devtools)
+#library(clustree)
+library(cowplot)
+library(dplyr)
+library(DoubletFinder)
+
+
+fs <- list.files('/media/RawData/14.NasalMucosa/RNA/SpliceMatrix_B1_ATAC_match/')
+dir <- '/media/RawData/14.NasalMucosa/RNA/SpliceMatrix_B1_ATAC_match'
+
+
+data <- lapply(fs, function(pro) {
+  print(pro)
+  file_path <- file.path(dir, pro)
+  print(file_path)
+  count_data <- Read10X(data.dir =paste0(file_path, '/',"04.Matrix/SpliceMatrix/"),
+                        gene.column =1)
+  print(str(count_data))
+  data <- CreateSeuratObject(counts = count_data,
+                             project = pro,
+                             min.cells = 3,
+                             min.features = 200)
+  return(data)
+})
+
+data_list
+
+saveRDS(data_list, 'rna_data_list_raw.rds')
+
+
+####################################QC####################################
+for (i in 1:length(data_list)) {
+  data <- data_list[[i]]
+    
+  id <- unique(data$orig.ident)
+  print(id)
+
+  # print(quantile(data$percent.mt ,seq(0.01,0.1,0.01)))
+  print(quantile(data$percent.mt ,seq(0.9, 1,0.01)))
+}
+
+
+for (i in 1:list_length) {
+  data_list[[i]][["percent.mt"]] <- PercentageFeatureSet(data_list[[i]], pattern = "^MT-")
+}
+
+for (i in 1:list_length) {
+  assign(paste0("data", i), data_list[[i]])
+}
+
+list_length
+
+for (i in 1:length(data_list)) {
+  data <- data_list[[i]]
+  
+  nFeature_RNA_quantiles <- quantile(data$nFeature_RNA, c(0.05, 0.95))
+  percent.mt_quantiles <- quantile(data$percent.mt, c(0.9))
+  
+  data_filtered <- subset(data, subset = nFeature_RNA > nFeature_RNA_quantiles[1] & nFeature_RNA < nFeature_RNA_quantiles[2] & percent.mt < percent.mt_quantiles[1])
+  
+  assign(paste0("data_filtered", i), data_filtered)
+
+  p <- VlnPlot(data_filtered, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3, pt.size = 0.2)
+  print(p)
+
+  id <- unique(data_filtered$orig.ident)
+  ggsave(paste("/media/AnalysisTempDisk2/Wuyisha/HNM_IMMUNE/RNA/QC/QC_after_data", id, ".pdf", sep = ""), plot = p, width = 15, height = 10)
+}
+
+data_list <- list()
+for (i in 1:list_length) {
+  data_list[[i]] <- get(paste0("data_filtered", i))
+}
+
+saveRDS(data_list, "raw_data_before_DoubletFinder.rds")
+
+
+
+
+rm(list=ls())
+library(stringr)
+library(Seurat)
+library(ggplot2)
+library(devtools)
+#library(clustree)
+library(cowplot)
+library(dplyr)
+library(DoubletFinder)
+
+saveRDS(data_list, "raw_data_before_DoubletFinder.rds")
+data_list <- readRDS('raw_data_before_DoubletFinder.rds')
+
+
+for (i in 1:length(data_list)) {
+  data_d <- data_list[[i]]
+  sweep.res.list <- DoubletFinder::paramSweep_v3(data_d, PCs = 1:30, sct = FALSE)
+  sweep.stats <- summarizeSweep(sweep.res.list, GT = FALSE)
+  bcmvn <- find.pK(sweep.stats)
+  mpK <- as.numeric(as.vector(bcmvn$pK[which.max(bcmvn$BCmetric)]))
+  dim_data <- dim(data_d)
+  nExp_poi <- round(0.02 * dim_data[2])  ## 3000~2.3%
+  data_d <- doubletFinder_v3(data_d, PCs = 1:30, pN = 0.05, pK = mpK, nExp = nExp_poi, reuse.pANN = FALSE, sct = FALSE)
+  assign(paste0("data_d", i), data_d)
+  
+  p <- paste("DF.classifications_", "0.05_", mpK, "_", nExp_poi, sep="")
+  
+  assign(paste0("D_p", i), p)
+}
+
+
+
+
+data_list <- list()
+for (i in 1:list_length) {
+  data_list[[i]] <- get(paste0("data_d", i))
+}
+
+
+for (i in 1:list_length) {
+
+  data_f <- data_list[[i]]
+
+  df_cols <- grep("DF.classifications", names(data_f@meta.data), value = TRUE)
+
+  data_f$Doublet <- ifelse(data_f@meta.data[[df_cols[1]]] == "Doublet", "Doublet", "Singlet")
+  data_f <- subset(data_f, subset = Doublet == "Singlet")
+  
+  assign(paste0("data_f", i), data_f)
+}
+
+
+data_list <- list()
+for (i in 1:list_length) {
+  data_list[[i]] <- get(paste0("data_f", i))
+}
+
+
+###########merge##############
+data_list <- list()
+for (i in 1:list_length) {
+  data_list[[i]] <- get(paste0("data_f", i))
+}
+
+data_list <- list()
+for (i in 1:list_length) {
+  data_list[[i]] <- get(paste0("data_f", i))
+}
+
+data=merge(x=data_list[[1]],
+           y=data_list[-1])
+
+
+saveRDS(data_list, "HNM_23samples_list.rds")
+saveRDS(data, "HNM_23samples_data.rds")
+
+data
