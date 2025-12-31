@@ -1,1 +1,131 @@
+library(stringr)
+library(Seurat)
+library(ggplot2)
+library(ggbeeswarm)
+library(dplyr)
+library(ggpubr) 
+# library(ArchR)
+getwd()
 
+
+## ALL celltype_L2
+setwd('/media/AnalysisTempDisk2/Wuyisha/HNM_IMMUNE/RNA/cell_prop')
+data <- readRDS('/media/AnalysisTempDisk2/Wuyisha/HNM_IMMUNE/RNA/data/HNM_23samples_data_4_immune_cells_1.rds')
+data
+
+Cells.sub <- subset(data@meta.data, group_A!="PAR")
+data <- subset(data, cells=row.names(Cells.sub))
+data
+
+########################  Bar chart ################
+Ratio_Sample <- data@meta.data %>%
+  group_by(sample, celltype_L2) %>%
+  summarise(n = n()) %>%
+  mutate(relative_freq = n / sum(n))
+print(Ratio_Sample)
+
+# Add group information to the data frame
+group_info <- data@meta.data %>%
+  select(sample, group_a) %>%
+  distinct()
+
+# Merge group information into the Ratio_Sample data frame
+Ratio_Sample <- Ratio_Sample %>%
+  left_join(group_info, by = ‘sample’)
+
+print(Ratio_Sample)
+write.csv(Ratio_Sample, ‘/media/AnalysisTempDisk2/Wuyisha/HNM_IMMUNE/RNA/cell_prop/Total_immune_scRNA_Sample_prop_group_by_cell_type_proportions_long.csv’, row.names = FALSE)
+
+
+
+col <- c("NAR" = "#0099CC", "SAR" = "#AC79A3", "PAR" = "#871E54")
+clusters <- unique(his_cell_num$celltype_L2)
+y_global <- range(his_cell_num$relative_freq, na.rm = TRUE)
+my_comparisons <- list(c("NAR", "SAR"), c("SAR", "PAR"), c("NAR", "PAR"))
+
+
+his_cell_num <- Ratio_Sample %>%
+  filter(group_a %in% c("NAR", "SAR", "PAR"))
+
+
+library(purrr)   # Add this line
+make_violin <- function(cluster_data, cluster_name, show_y = FALSE) {
+  ggplot(cluster_data,
+         aes(x = group_a, y = relative_freq, colour = group_a)) +
+    geom_violin(width = 0.8, scale = ‘width’, alpha = 0.7) +
+    geom_quasirandom(size = 1.5, width = 0.15, alpha = 0.8) +
+    stat_compare_means(comparisons = my_comparisons,
+                       label = ‘p.signif’,
+                       p.adjust.method = ‘fdr’,
+                       hide.ns = TRUE) +
+    coord_cartesian(ylim = y_global) +
+    scale_colour_manual(values = col) +
+    
+    ## Remove top-right legend
+    guides(colour = ‘none’) +
+    
+    theme_classic() +
+    theme(
+      axis.line.x  = element_line(),
+      axis.line.y  = if (show_y) element_line() else element_blank(),
+      axis.text.y  = if (show_y) element_text(size = 10) else element_blank(),
+      axis.title.y = if (show_y) element_text(size = 12) else element_blank(),
+      axis.text.x  = element_text(angle = 0, size = 10, hjust = 1, vjust = 1),
+      axis.title.x = element_blank(),
+      plot.title   = element_text(size = 10, hjust = 0.5),
+      panel.spacing = unit(0, ‘lines’),
+      strip.background = element_blank()
+    ) +
+    labs(title = cluster_name)
+}
+
+
+# Batch plotting
+plots <- clusters %>%
+  set_names() %>%
+  map(~ his_cell_num %>% filter(celltype_L2 == .x)) %>%
+  imap(~ make_violin(.x, .y, show_y = (.y == clusters[1])))
+final_plot <- wrap_plots(plots, nrow = 1)
+
+# save
+ggsave("scRNA_immune_sameY_1row.pdf", final_plot,
+       width = length(clusters) * 2, height = 4, dpi = 300)
+
+
+
+########################stacked_chart ################
+library(ggplot2)
+library(ggalluvial)
+
+Cellratio <- prop.table(table(data$celltype_L2, data$group_a),margin=2)#
+
+Cellratio <- as.data.frame(Cellratio)
+colnames(Cellratio) <- c("celltype","group","ratio") #
+#Cellratio$sample <- factor(Cellratio$sample,levels = c()) #
+Cellratio$group <- factor(Cellratio$group, levels=c("NAR","SAR","PAR"))
+Cellratio$celltype <- factor(Cellratio$celltype, levels = c(  
+  'CD4_T_Cells',    
+  'CD8_T_Cells', 'Dendritic', 'Macrophage', 'Mast', 'Monocyte' ,
+  'B_Cells',   
+  'Plasma'))
+
+
+p <- ggplot(Cellratio, aes(x = group, y = ratio, fill = celltype, stratum = celltype, alluvium = celltype)) +
+  geom_col(width = 0.6, color = NA) +
+  geom_flow(width = 0.4, alpha = 0.6, knot.pos = 0) + # knot.pos
+  scale_fill_manual(values = c( "#35AC94",  '#58856A',           
+'#AC79A3',  '#423a85',   '#87465b','#d4bcda',  '#f08c3c',  "#f3b669")) + # 
+  theme_classic() + 
+  theme(
+    panel.border = element_rect(fill = NA, color = "black", size = 0.5, linetype = "solid"),
+       axis.text.x = element_text(angle = 0, size = 12, hjust = 1, vjust = 1),
+    axis.title = element_text(size = 14),  
+    axis.text = element_text(size = 12),  
+    legend.title = element_text(size = 12),
+    legend.text = element_text(size = 10), 
+    plot.title = element_text(size = 16)  
+  ) +
+  labs(title = "T Cell Type Ratio Stacked Chart Grouped by Group") 
+p
+
+ggsave(plot = p,"/media/AnalysisTempDisk2/Wuyisha/HNM_IMMUNE/RNA/cell_prop/immune_ratio_stacked_chart_groupby_group.pdf",width =6.5,height=8)
