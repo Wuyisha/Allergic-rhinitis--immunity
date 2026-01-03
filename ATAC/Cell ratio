@@ -1,0 +1,155 @@
+library(ArchR)
+library(parallel)
+library(Seurat)
+library(pryr) 
+library(dplyr)
+addArchRThreads(threads = 16)
+set.seed(1)
+addArchRGenome("hg38")
+
+setwd('/media/AnalysisTempDisk2/Wuyisha/HNM_IMMUNE/ArchR/Downstream/Cell_ratio')
+proj <- loadArchRProject(path = "/media/AnalysisTempDisk2/Wuyisha/HNM_IMMUNE/ArchR/Immune_RNA_transfer/ArchRProject_23sample_RNA_transfer_T_B_MY_250819")
+
+
+cellColData <- getCellColData(proj)
+cell_col_data <- as.data.frame(cellColData)
+
+Ratio_Sample <- cell_col_data %>%
+  group_by(sample, celltype_L2) %>%
+  summarise(n = n()) %>%
+  mutate(relative_freq = n / sum(n))
+print(Ratio_Sample)
+
+
+
+Ratio_Sample$group_a <- factor(Ratio_Sample$group_a, levels = c("NAR", "SAR", "PAR"))
+col <- c("NAR" = "#a8a9cb", "SAR" = "#f3b669", "PAR" = "#f08c3c")
+his_cell_num <- Ratio_Sample %>%
+  filter(group_a %in% c("NAR", "SAR", "PAR"))
+my_comparisons <- list(c("NAR", "SAR"), c("SAR", "PAR"), c("NAR", "PAR"))
+clusters <- unique(his_cell_num$celltype_L2)
+
+
+############################ bar chart ############################
+y_global <- range(his_cell_num$relative_freq, na.rm = TRUE)
+
+make_violin <- function(cluster_data, cluster_name, show_y = FALSE) {
+  ggplot(cluster_data,
+         aes(x = group_a, y = relative_freq, colour = group_a)) +
+    geom_violin(width = 0.8, scale = "width", alpha = 0.7) +
+    geom_quasirandom(size = 1.5, width = 0.15, alpha = 0.8) +
+    stat_compare_means(comparisons = my_comparisons,
+                       label = "p.format", p.adjust.method = "fdr") +
+    coord_cartesian(ylim = y_global) +
+    scale_colour_manual(values = col) +
+    theme_classic() +
+    theme(
+      axis.line.x  = element_line(),
+      axis.line.y  = if (show_y) element_line() else element_blank(),
+      axis.text.y  = if (show_y) element_text(size = 10) else element_blank(),
+      axis.title.y = if (show_y) element_text(size = 12) else element_blank(),
+      axis.text.x  = element_text(angle = 60, size = 10, hjust = 1, vjust = 1),
+      axis.title.x = element_blank(),
+      plot.title   = element_text(size = 10, hjust = 0.5),
+      panel.spacing = unit(0, "lines"),
+      strip.background = element_blank()
+    ) +
+    labs(title = cluster_name)
+}
+
+
+plots <- clusters %>%
+  set_names() %>%
+  map(~ his_cell_num %>% filter(celltype_L2 == .x)) %>%
+  imap(~ make_violin(.x, .y, show_y = (.y == clusters[1])))
+
+
+final_plot <- wrap_plots(plots, nrow = 1)
+
+ggsave("scATAC_immune_sameY_1row.pdf", final_plot,
+       width = length(clusters) * 2, height = 4, dpi = 300)
+ggsave("scATAC_immune_sameY_1row.png", final_plot,
+       width = length(clusters) * 2, height = 4, dpi = 300)
+
+
+
+
+############################ Stacked chart by group ############################
+
+library(ggplot2)
+library(ggalluvial)
+
+Cellratio <- prop.table(table(proj$celltype_L2, proj$group_a),margin=2
+
+Cellratio <- as.data.frame(Cellratio)
+colnames(Cellratio) <- c("celltype","group","ratio") 
+#Cellratio$sample <- factor(Cellratio$sample,levels = c()) 
+Cellratio$group <- factor(Cellratio$group, levels=c("NAR","SAR","PAR"))
+Cellratio$celltype <- factor(Cellratio$celltype, levels = c('CD4_T_Cells',    
+  'CD8_T_Cells', 'Dendritic', 'Macrophage', 'Mast', 'Monocyte' ,
+  'B_Cells',   
+  'Plasma'))
+
+
+p <- ggplot(Cellratio, aes(x = group, y = ratio, fill = celltype, stratum = celltype, alluvium = celltype)) +
+  geom_col(width = 0.6, color = NA) +
+  geom_flow(width = 0.4, alpha = 0.6, knot.pos = 0) + 
+  scale_fill_manual(values = c( "#35AC94",  '#58856A',           
+'#AC79A3',  '#423a85',   '#87465b','#d4bcda',  '#f08c3c',  "#f3b669")) + 
+  theme_classic() +
+  theme(
+    panel.border = element_rect(fill = NA, color = "black", size = 0.5, linetype = "solid"),
+       axis.text.x = element_text(angle = 0, size = 12, hjust = 1, vjust = 1),
+    axis.title = element_text(size = 14),  
+    axis.text = element_text(size = 12),   
+    legend.title = element_text(size = 12),
+    legend.text = element_text(size = 10),
+    plot.title = element_text(size = 16)  
+  ) +
+  labs(title = "Immune Cell Type Ratio Stacked Chart") #
+p
+
+ggsave(plot = p,"/media/AnalysisTempDisk2/Wuyisha/HNM_IMMUNE/ArchR/Downstream/Cell_ratio/Immune_ratio_stacked_chart_groupby_group.pdf",width =6.5,height=8)
+
+
+
+
+############################ Stacked chart by sample ############################
+
+library(ggplot2)
+library(ggalluvial)
+
+Cellratio <- prop.table(table(proj$celltype_L2, proj$BioNames),margin=2)
+
+Cellratio <- as.data.frame(Cellratio)
+colnames(Cellratio) <- c("celltype","group","ratio") #
+#Cellratio$sample <- factor(Cellratio$sample,levels = c()) #
+# Cellratio$group <- factor(Cellratio$group, levels=c("NAR","SAR","PAR"))
+
+Cellratio$celltype <- factor(Cellratio$celltype, levels = c(  
+ 'CD4_T_Cells','CD8_T_Cells','B_Cells','Plasma',
+ 'Macrophage','Dendritic','Monocyte','Mast'
+  ))
+
+
+
+p <- ggplot(Cellratio, aes(x = group, y = ratio, fill = celltype, stratum = celltype, alluvium = celltype)) +
+  geom_col(width = 0.6, color = NA) +
+  geom_flow(width = 0.4, alpha = 0.6, knot.pos = 0) + 
+ scale_fill_manual(values = c( 
+      "#35AC94", "#58856A", "#f08c3c", "#f3b669", 
+           "#423a85", "#AC79A3", "#d4bcda", "#87465b")) + 
+  theme_classic() +
+  theme(
+    panel.border = element_rect(fill = NA, color = "black", size = 0.5, linetype = "solid"),
+       axis.text.x = element_text(angle = 90, size = 12, hjust = 1, vjust = 1),
+    axis.title = element_text(size = 14),  
+    axis.text = element_text(size = 12),   
+    legend.title = element_text(size = 12),
+    legend.text = element_text(size = 10), 
+    plot.title = element_text(size = 16)   
+  ) +
+  labs(title = "Immune Cell Type Ratio Stacked Chart") 
+p
+
+ggsave(plot = p,"/media/AnalysisTempDisk2/Wuyisha/HNM_IMMUNE/ArchR/Downstream/Cell_ratio/Immune_ratio_stacked_chart_groupby_sample.pdf",width =10,height=8)
