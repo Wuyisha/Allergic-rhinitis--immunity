@@ -1,1 +1,1285 @@
 
+library(ArchR)
+library(parallel)
+library(Seurat)
+library(pryr) 
+library(dplyr)
+addArchRThreads(threads = 16)
+library(BSgenome.Hsapiens.UCSC.hg38)
+set.seed(1)
+addArchRGenome("hg38")
+
+setwd('/media/AnalysisTempDisk2/Wuyisha/HNM_IMMUNE/ArchR/Downstream/TF_motif/T_cells/ArchRProject_23sample_motif_CD4_Tcm')
+proj_dir <-  '/media/AnalysisTempDisk2/Wuyisha/HNM_IMMUNE/ArchR/Downstream/TF_motif/T_cells/ArchRProject_23sample_motif_CD4_Tcm'
+projArchR_CD4 <- loadArchRProject(proj_dir)
+projArchR_CD4
+projArchR_CD4 <- addArchRAnnotations(ArchRProj = projArchR_CD4, collection = "EncodeTFBS")
+
+
+
+#### Using MAR vs NAR, and SAR vs NAR for intergroup comparisons ####
+##dap_Trm_CD4
+dap_Trm_CD4 <- readRDS('./marker_features_dx.rds')
+cutOff <- "FDR < 0.1 & abs(Log2FC) > 0.25"
+
+se_sar <- dap_Trm_CD4[[1]]
+se_par <- dap_Trm_CD4[[2]]
+
+colnames(se_sar) <- "SAR"
+colnames(se_par) <- "PAR"
+
+peakMarkerList_CD4_Tcm <- cbind(se_sar, se_par)
+print(peakMarkerList_CD4_Tcm)
+
+
+enrichEncode_CD4_Tcm <- peakAnnoEnrichment(
+  seMarker = peakMarkerList_CD4_Tcm,
+  ArchRProj = projArchR_CD4,
+  peakAnnotation = "EncodeTFBS", 
+  cutOff = "FDR < 0.1 & Log2FC > 0.25"
+)
+
+
+
+###组间差异motif share###
+# 加载必要的包
+library(ggplot2)
+library(dplyr)
+library(stringr)
+library(ggrepel)
+
+# 假设数据框的列名已经正确命名为 'SAR vs NAR (-Log10 (Padj))' 和 'MAR vs NAR (-Log10 (Padj))'
+# 如果列名不同，请根据实际情况调整列名
+colnames(enrich_CD4_Tcm_MOTIF) <- c("SAR vs NAR (-Log10 (Padj))", "MAR vs NAR (-Log10 (Padj))")
+
+# 获取 MAR 列前10个值对应的基因名（降序排列）
+top_10_SAR <- enrich_CD4_Tcm_MOTIF %>% 
+  arrange(desc(`MAR vs NAR (-Log10 (Padj))`)) %>%  # 按 MAR 列降序排列
+  head(10) %>%  # 提取前10行
+  rownames() %>%  # 提取对应的基因名
+  as.character()  # 转换为字符向量
+
+# 提取基因名的前部分（例如 "ATF2"、"BCL11A" 等）
+extract_gene_name <- function(gene) {
+  str_extract(gene, "[A-Za-z0-9]+(?=_)")  # 提取第一个下划线之前的部分
+}
+
+# 将所有基因名转换为简化格式
+simplified_gene_names <- rownames(enrich_CD4_Tcm_MOTIF) %>% 
+  sapply(extract_gene_name) %>% 
+  as.character()
+
+# 计算每个点的颜色强度（X轴数值 + Y轴数值）
+enrich_CD4_Tcm_MOTIF$color_intensity <- 
+  enrich_CD4_Tcm_MOTIF$`SAR vs NAR (-Log10 (Padj))` + 
+  enrich_CD4_Tcm_MOTIF$`MAR vs NAR (-Log10 (Padj))`
+
+# 绘制点图
+ggplot(enrich_CD4_Tcm_MOTIF, aes(
+  x = `SAR vs NAR (-Log10 (Padj))`, 
+  y = `MAR vs NAR (-Log10 (Padj))`, 
+  color = color_intensity  # 使用颜色强度映射颜色
+)) +
+  geom_point(alpha = 0.9) +  # 设置透明度
+  scale_color_gradient(low = "#F69F99", high = "#bd1316") +  # 定义颜色渐变范围
+  geom_text_repel(
+    aes(label = ifelse(simplified_gene_names %in% sapply(top_10_SAR, extract_gene_name), simplified_gene_names, "")),
+    box.padding = 0.35,  # 调整文本框的填充
+    point.padding = 0.5,  # 调整文本与点的距离
+    size = 5, 
+    color = "#bd1316",
+    segment.size = 0.7,  # 调整连线的粗细
+    segment.color = "#bd1316",  # 调整连线的颜色
+    arrow = arrow(length = unit(0.02, "npc")),  # 添加箭头
+    direction = "y"  # 调整文本的方向
+  ) +  # 只显示前10个基因名
+  labs(title = "SAR and MAR TF Motif in CD4_Tcm", 
+       x = "SAR vs NAR (-Log10 (Padj))", 
+       y = "MAR vs NAR (-Log10 (Padj))") +  # 添加标题和轴标签
+  theme_minimal() +  # 使用简洁的主题
+  theme(
+    plot.background = element_blank(),  # 去除背景
+    panel.border = element_rect(color = "black", fill = NA, size = 1),  # 添加方框
+    panel.grid.major = element_blank(),  # 去除网格线
+    panel.grid.minor = element_blank(),
+    panel.background = element_blank()  # 去除面板背景
+  )
+ggsave('./Motif/SAR and MAR vs NAR TF Motif in CD4_Tcm.pdf',width = 4.5,height = 4)
+
+
+
+####使用MARvsSAR,以及SAR vs NAR进行组间比较(MAR vs SAR DAR太少，不足以支持这一分析)####
+##dap_Trm_CD4
+dap_Trm_CD4_SAR <- readRDS('./marker_features_dx.rds')
+cutOff <- "FDR < 0.1 & abs(Log2FC) > 0.25"
+# 提取两个 SummarizedExperiment 对象
+se_sar <- dap_Trm_CD4_SAR[[1]]
+se_sar$Group <- 'SAR'
+
+dap_Trm_CD4_PAR <- readRDS('./marker_features_dx_MAR_vs_SAR.rds')
+cutOff <- "FDR < 0.1 & abs(Log2FC) > 0.25"
+# 提取两个 SummarizedExperiment 对象
+se_par <- dap_Trm_CD4_PAR
+se_par$Group <- 'PAR'
+colnames(se_sar) <- "SAR"
+colnames(se_par) <- "PAR"
+
+
+dap_Trm_CD4_PAR_data <- getMarkers(seMarker = dap_Trm_CD4_PAR, cutOff = cutOff, returnGR = TRUE)
+dap_Trm_CD4_PAR_data <- as.data.frame(dap_Trm_CD4_PAR_data)
+
+
+peakMarkerList_CD4_Tcm_activaty <- cbind(se_sar, se_par)
+print(peakMarkerList_CD4_Tcm_activaty)
+
+
+enrichEncode_CD4_Tcm_activaty <- peakAnnoEnrichment(
+  seMarker = peakMarkerList_CD4_Tcm_activaty,
+  ArchRProj = projArchR_CD4,
+  peakAnnotation = "EncodeTFBS", 
+  cutOff = "FDR < 0.1 & Log2FC > 0.25"
+)
+
+
+enrichEncode_CD4_Tcm_activaty
+heatmapEncode <- plotEnrichHeatmap(enrichEncode_CD4_Tcm_activaty, n = 40, transpose = TRUE)
+ComplexHeatmap::draw(heatmapEncode, heatmap_legend_side = "bot", annotation_legend_side = "bot")
+
+heatmapEncode <- plotEnrichHeatmap(enrichEncode_CD4_Tcm_activaty, n = 120, returnMatrix = TRUE)
+
+enrich_CD4_Tcm_activaty_MOTIF <- enrichEncode_CD4_Tcm_activaty@assays@data$mlog10Padj
+write.csv(enrich_CD4_Tcm_activaty_MOTIF, './Motif/SAR and MAR _activaty TF Motif in CD4_Tcm_Top120.csv')
+
+# plotVarDev <- getVarDeviations(projArchR, name = "MotifMatrix", plot = TRUE)
+# plotVarDev'
+
+
+
+###组间差异motif share###
+# 加载必要的包
+library(ggplot2)
+library(dplyr)
+library(stringr)
+library(ggrepel)
+
+# 假设数据框的列名已经正确命名为 'SAR vs NAR (-Log10 (Padj))' 和 'MAR vs NAR (-Log10 (Padj))'
+# 如果列名不同，请根据实际情况调整列名
+colnames(enrich_CD4_Tcm_activaty_MOTIF) <- c("SAR vs NAR (-Log10 (Padj))", "MAR vs SAR (-Log10 (Padj))")
+
+# 获取 MAR 列前10个值对应的基因名（降序排列）
+top_10_SAR <- enrich_CD4_Tcm_activaty_MOTIF %>% 
+  arrange(desc(`MAR vs SAR (-Log10 (Padj))`)) %>%  # 按 MAR 列降序排列
+  head(10) %>%  # 提取前10行
+  rownames() %>%  # 提取对应的基因名
+  as.character()  # 转换为字符向量
+
+# 提取基因名的前部分（例如 "ATF2"、"BCL11A" 等）
+extract_gene_name <- function(gene) {
+  str_extract(gene, "[A-Za-z0-9]+(?=_)")  # 提取第一个下划线之前的部分
+}
+
+# 将所有基因名转换为简化格式
+simplified_gene_names <- rownames(enrich_CD4_Tcm_activaty_MOTIF) %>% 
+  sapply(extract_gene_name) %>% 
+  as.character()
+
+# 计算每个点的颜色强度（X轴数值 + Y轴数值）
+enrich_CD4_Tcm_activaty_MOTIF$color_intensity <- 
+  enrich_CD4_Tcm_activaty_MOTIF$`SAR vs NAR (-Log10 (Padj))` + 
+  enrich_CD4_Tcm_activaty_MOTIF$`MAR vs SAR (-Log10 (Padj))`
+
+# 绘制点图
+ggplot(enrich_CD4_Tcm_activaty_MOTIF, aes(
+  x = `SAR vs NAR (-Log10 (Padj))`, 
+  y = `MAR vs SAR (-Log10 (Padj))`, 
+  color = color_intensity  # 使用颜色强度映射颜色
+)) +
+  geom_point(alpha = 0.9) +  # 设置透明度
+  scale_color_gradient(low = "#F69F99", high = "#bd1316") +  # 定义颜色渐变范围
+  geom_text_repel(
+    aes(label = ifelse(simplified_gene_names %in% sapply(top_10_SAR, extract_gene_name), simplified_gene_names, "")),
+    box.padding = 0.35,  # 调整文本框的填充
+    point.padding = 0.5,  # 调整文本与点的距离
+    size = 5, 
+    color = "#bd1316",
+    segment.size = 0.7,  # 调整连线的粗细
+    segment.color = "#bd1316",  # 调整连线的颜色
+    arrow = arrow(length = unit(0.02, "npc")),  # 添加箭头
+    direction = "y"  # 调整文本的方向
+  ) +  # 只显示前10个基因名
+  labs(title = "SAR and MAR activaty TF Motif in CD4_Tcm", 
+       x = "SAR vs NAR (-Log10 (Padj))", 
+       y = "MAR vs SAR (-Log10 (Padj))") +  # 添加标题和轴标签
+  theme_minimal() +  # 使用简洁的主题
+  theme(
+    plot.background = element_blank(),  # 去除背景
+    panel.border = element_rect(color = "black", fill = NA, size = 1),  # 添加方框
+    panel.grid.major = element_blank(),  # 去除网格线
+    panel.grid.minor = element_blank(),
+    panel.background = element_blank()  # 去除面板背景
+  )
+ggsave('./Motif/SAR and MAR activaty_TF Motif in CD4_Tcm.pdf',width = 4.5,height = 4)
+
+
+
+
+####DAP 峰位置确定 getMarkerFeatures MAR vs SAR and SAR vs NAR getmarkerfeature TF motif####
+####motif####
+# 获取 MotifMatrix
+# motifMatrix <- getMatrixFromProject(projArchR, useMatrix = "MotifMatrix")
+# data <- motifMatrix@assays@data@listData[["z"]]
+# # 检查数据的分布
+# hist(as.numeric(motifMatrix@assays@data@listData[["z"]]), main = "Histogram of Matrix Values", xlab = "Values", breaks = 50)
+# boxplot(data, main = "Boxplot of Matrix Values", ylab = "Values")
+# # 检查数据的分布
+# par(mfrow = c(1, 2))
+# hist(assays(motifMatrix)$z, main = "Histogram of z-scores", xlab = "z-scores", breaks = 50)
+# boxplot(assays(motifMatrix)$z, main = "Boxplot of z-scores", ylab = "z-scores")
+
+###SAR
+peakMarkers_SAR_CD4_Tcm <- getMarkerFeatures(
+  projArchR_CD4,
+  useMatrix = "MotifMatrix",
+  useSeqnames = "z",
+  useGroups = 'SAR',
+  bgdGroups = "NAR",maxCells = 544,
+  groupBy = "group_A",
+  bias = c( "TSSEnrichment","log10(nFrags)"),
+  testMethod = "wilcoxon"
+)
+
+rd <- rowData(peakMarkers_SAR_CD4_Tcm)
+marker_assays_SAR_CD4_Tcm <- setNames(Reduce(cbind, assays(peakMarkers_SAR_CD4_Tcm)), nm = names(assays(peakMarkers_SAR_CD4_Tcm)))
+marker_tb_SAR_CD4_Tcm <- as.data.frame(cbind(rd, marker_assays_SAR_CD4_Tcm))
+marker_tb_SAR_CD4_Tcm$group <- 'SAR'
+
+
+###MAR
+peakMarkers_MAR_CD4_Tcm <- getMarkerFeatures(
+  projArchR_CD4,
+  useMatrix = "MotifMatrix",
+  useSeqnames = "z",
+  useGroups = 'MAR',
+  bgdGroups = "NAR",maxCells = 500,
+  groupBy = "group_A",
+  bias = c( "TSSEnrichment","log10(nFrags)"),
+  testMethod = "wilcoxon"
+)
+
+rd <- rowData(peakMarkers_MAR_CD4_Tcm)
+marker_assays_MAR_CD4_Tcm <- setNames(Reduce(cbind, assays(peakMarkers_MAR_CD4_Tcm)), nm = names(assays(peakMarkers_MAR_CD4_Tcm)))
+marker_tb_MAR_CD4_Tcm <- as.data.frame(cbind(rd, marker_assays_MAR_CD4_Tcm))
+marker_tb_MAR_CD4_Tcm$group <- 'MAR'
+
+colnames(marker_tb_MAR_CD4_Tcm)
+marker_data <- rbind(marker_tb_SAR_CD4_Tcm, marker_tb_MAR_CD4_Tcm)
+write.csv(marker_data, './Motif/scATAC_CD4_Tcm_TFmotif_getMarkerFeatures.csv')
+marker_data<- read.csv('./Motif/scATAC_CD4_Tcm_TFmotif_getMarkerFeatures.csv')
+# 过滤条件
+#cutOff = "MeanDiff > 0.2 & Log2FC > 0.25"
+filtered_data_CD4_Tcm <- marker_data[abs(marker_data$MeanDiff) > 0.1 & marker_data$FDR < 0.05, ]
+write.csv(filtered_data_CD4_Tcm, "./Motif/scATAC_CD4_Tcm_TFmotif_getMarkerFeatures_motif_0.1_0.05.csv")
+filtered_data_CD4_Tcm <- marker_data[abs(marker_data$MeanDiff) > 0.2 & marker_data$FDR < 0.05, ]
+write.csv(filtered_data_CD4_Tcm, "./Motif/scATAC_CD4_Tcm_TFmotif_getMarkerFeatures_motif_0.2_0.05.csv")
+
+
+
+####火山图绘制####
+library(Seurat)
+library(ComplexHeatmap)
+library(GetoptLong)
+library(data.table)
+library(dplyr)
+library(tidyr)
+library(tibble)
+library(RColorBrewer)
+library(readr)
+library(grDevices)
+library(ggraph)
+library(igraph)
+library(ggplot2)
+library(ggthemes)
+library(cowplot)
+library(rstatix)
+library(ggpubr)
+library(ggrastr)
+library(ggrepel)
+
+## CD4_Tcm
+merged_data <- marker_data
+colnames(merged_data)
+# [1] "seqnames" "idx"      "name"     "Mean"     "FDR"      "Pval"    
+# [7] "MeanDiff" "AUC"      "MeanBGD"  "group"  
+
+to_remove <- grepl("^IG", merged_data$name) | 
+  grepl("^HLA-", merged_data$name) | 
+  grepl("^RPS", merged_data$name) | 
+  grepl("^RPL", merged_data$name)
+
+# 使用逻辑索引筛选数据框，删除标记的基因
+merged_data <- merged_data[!to_remove, ]
+
+
+colnames(merged_data)
+# [1] "seqnames" "idx"      "name"     "Mean"     "FDR"      "Pval"    
+# [7] "MeanDiff" "AUC"      "MeanBGD"  "group" 
+
+unique(merged_data$group)
+group_results <- list()
+for (group_name in unique(merged_data$group)) {
+  # group_name <- 'SAR'
+  # group_name <- 'MAR'
+  
+  # 提取当前分组的数据
+  group_data <- merged_data[merged_data$group == group_name, ]
+  
+  # 提取 logfoldchanges 最高和最低的 7 个基因
+  topGenes <- group_data %>%
+    top_n(18, FDR) %>%  # 最高的 7 个
+    bind_rows(group_data %>% top_n(-18, FDR)) %>%  # 最低的 7 个
+    pull(name)
+  
+  # 标记 Top-ranked 基因
+  group_data$Topranked <- ifelse(group_data$name %in% topGenes, "Top-ranked", "Others")
+  
+  # 标记显著性
+  group_data <- group_data %>%
+    mutate(
+      Significance = case_when(
+        FDR < 0.05 & MeanDiff > 0.2 ~ "Up",
+        FDR < 0.05 & MeanDiff < -0.2 ~ "Down",
+        TRUE ~ "Others"
+      )
+    )
+  
+  # 计算 -log10(pvals_adj)
+  group_data$pAdj.log <- -log10(group_data$FDR)
+  
+  #pdf("./TF_motif/scATAC_CD8_Trm_TFmotif_getmarkerfeature_Volcano.pdf", width = 4, height = 5)
+  # 绘制火山图
+  g <- ggplot(group_data, aes(x = MeanDiff, y = pAdj.log)) +
+    geom_point_rast(aes(color = Significance)) +
+    scale_color_manual(values = c("Up" = "#e83b2f", "Down" = "#3E5665", "Others" = "grey")) +#EAD256
+    theme_classic(base_size = 12) +
+    theme(
+      legend.position = "bottom",
+      axis.text = element_text(size = 10, color = "black"),
+      axis.title = element_text(size = 12, color = "black")
+    ) +
+    geom_vline(xintercept = c(-0.1, 0.1), linetype = "dashed", color = "grey") +
+    geom_text_repel(
+      data = subset(group_data, Topranked == "Top-ranked"),
+      aes(label = name),
+      size = 4.6, fontface = "italic", color = "black",
+      box.padding = unit(0.35, "lines"),
+      point.padding = unit(0.3, "lines")
+    ) +
+    ggtitle(paste("Volcano Plot for", group_name)) +
+    ylab("-Log10(Padj)")
+  g
+  
+  # 保存图形
+  ggsave(sprintf("./Motif/scATAC_CD4_Tcm_TFmotif_getmarkerfeature_meandiff_0.2_Volcano_%s.pdf", gsub(" ", "_", group_name)), plot = g, width = 4, height = 5)
+  ggsave(sprintf("./Motif/scATAC_CD4_Tcm_TFmotif_getmarkerfeature_meandiff_0.2_Volcano_%s.png", gsub(" ", "_", group_name)), plot = g, width = 4, height = 5)
+  
+  # 将当前分组的结果存储到列表中
+  group_results[[group_name]] <- group_data
+}
+
+
+###韦恩图####
+###up_motif
+getwd()
+library(readr)
+data <- read.csv("./Motif/scATAC_CD4_Tcm_TFmotif_getMarkerFeatures_motif_0.2_0.05.csv")
+data_up <- data[data$MeanDiff > 0.2 & data$FDR < 0.05, ]
+data_down <- data[data$MeanDiff < -0.2 & data$FDR < 0.05, ]
+
+MAR_1 <- data_up$name[data_up$group == "MAR"]
+SAR_1 <- data_up$name[data_up$group == "SAR"]
+
+
+####up_motif####
+## 找到交集
+common_names <- intersect(MAR_1, SAR_1)
+# 找到 marker_tb_MAR_vs_SAR_up 中独有的 name 值
+unique_MAR_vs_NAR <- setdiff(MAR_1, SAR_1)
+# 找到 marker_tb_SAR_vs_NAR_up 中独有的 name 值
+unique_SAR_vs_NAR <- setdiff(SAR_1, MAR_1)
+
+# 计算每个类别的数量
+common_count <- length(common_names)
+unique_MAR_vs_NAR_count <- length(unique_MAR_vs_NAR)
+unique_SAR_vs_NAR_count <- length(unique_SAR_vs_NAR)
+
+# 将结果合并到一个数据框中
+results <- data.frame(
+  Type = c(rep("Common", common_count),
+           rep("Unique to MAR_vs_SAR", unique_MAR_vs_NAR_count),
+           rep("Unique to SAR_vs_NAR", unique_SAR_vs_NAR_count)),
+  Names = c(common_names, unique_MAR_vs_NAR, unique_SAR_vs_NAR)
+)
+
+# 打印结果
+print("Common names:")
+print(common_names)
+print("Unique names in marker_tb_MAR_vs_SAR_up:")
+print(unique_MAR_vs_NAR)
+print("Unique names in marker_tb_SAR_vs_NAR_up:")
+print(unique_SAR_vs_NAR)
+
+# 打印数量计数
+print("Number of common names:")
+print(common_count)
+print("Number of unique names in marker_tb_MAR_vs_SAR_up:")
+print(unique_MAR_vs_NAR_count)
+print("Number of unique names in marker_tb_SAR_vs_NAR_up:")
+print(unique_SAR_vs_NAR_count)
+
+# print(common_count)
+# [1] 39
+# > print("Number of unique names in marker_tb_MAR_vs_SAR_up:")
+# [1] "Number of unique names in marker_tb_MAR_vs_SAR_up:"
+# > print(unique_MAR_vs_NAR_count)
+# [1] 36
+# > print("Number of unique names in marker_tb_SAR_vs_NAR_up:")
+# [1] "Number of unique names in marker_tb_SAR_vs_NAR_up:"
+# > print(unique_SAR_vs_NAR_count)
+# [1] 30
+write.table(results, file = "./Motif/scATAC_up_motif_CD4_Tcm__MAR vs NAR and SAR vs NAR getmarkerfeature TF motif_common or unique_meandiff_0.2.tsv", sep = "\t", row.names = FALSE, quote = FALSE)
+
+
+
+MAR <- na.omit(MAR_1)
+SAR <- na.omit(SAR_1)
+
+# 创建一个列表来存储这些子集
+venn_data <- list(MAR, SAR)
+
+#install.packages("VennDiagram")
+library(VennDiagram)
+# 绘制韦恩图
+# 计算每个集合的百分比
+total_elements <- length(unique(unlist(venn_data)))
+percentages <- sapply(venn_data, function(x) length(x) / total_elements * 100)
+
+
+# 创建Venn图
+venn.plot <- venn.diagram(
+  x = venn_data,
+  category.names = c("MAR", "SAR"),
+  filename = NULL,
+  output = TRUE,
+  height = 8, width = 10, resolution = 300,
+  fill = c("#51A3A3", "#D5CA67"), # 设置每个集合的颜色
+  cat.cex = 1.5, # 设置类别标签的字体大小
+  cex = 1.5, # 设置数字的字体大小
+  cat.pos = 0, # 设置类别标签的位置
+  cat.dist = 0.05, # 设置类别标签的距离
+  rotation.degree = 0, # 设置旋转角度
+  label.col = "black", # 设置标签颜色
+  cat.col = c( "green", "yellow"), # 设置类别标签颜色
+  print.mode = c("raw", "percent"), # 显示百分比
+  sigdigs = 2 # 设置百分比的小数位数
+)
+
+# 保存为PDF
+pdf("./Motif/venn_diagram_up_motif_CD4_Tcm_vs_NAR_meandiff_0.2.pdf")
+grid.draw(venn.plot)
+dev.off()
+
+
+# 获取每个交集的具体元素
+venn_partitions <- get.venn.partitions(venn_data)
+venn_partitions <-as.data.frame(venn_partitions)
+# 打印每个交集的具体元素
+print(venn_partitions)
+write_tsv(venn_partitions, './Motif/CD4_Tcm_up_motid_venn_partitions_VS_NAR_meandiff_0.2.tsv')
+
+
+# 示例数据
+up_motif_count <- data.frame(
+  category = c("SAR Unique", "MAR Unique", "Shared"),
+  value = c(30, 36, 39)
+)
+
+# 绘制饼图
+# 自定义颜色
+colors <- c("#D75B58", "#EAD256", "#8DBCB6")
+
+# 计算百分比
+up_motif_count$percent <- round(up_motif_count$value / sum(up_motif_count$value) * 100, 2)
+
+# 绘制饼图
+ggplot(up_motif_count, aes(x = "", y = value, fill = category)) +
+  geom_bar(stat = "identity", width = 1) +
+  coord_polar(theta = "y") +
+  theme_void() +
+  theme(legend.position = "right") +
+  labs(fill = "", title = "Up-regulated TF motif") +
+  scale_fill_manual(values = colors) +
+  geom_text(aes(label = paste0(category, "\n", percent, "%")), 
+            position = position_stack(vjust = 0.5), size = 4)
+ggsave('./Motif/Up_TF Motif in CD4_Tcm_VS_NAR_pie_meandiff_0.2.pdf',width = 4.5,height = 4)
+
+
+####down_motif####
+data <- read.csv("./Motif/scATAC_CD4_Tcm_TFmotif_getMarkerFeatures_motif_0.2_0.05.csv")
+data_down <- data[data$MeanDiff < -0.2 & data$FDR < 0.05, ]
+
+MAR_1 <- data_down$name[data_down$group == "MAR"]
+SAR_1 <- data_down$name[data_down$group == "SAR"]
+
+
+## 找到交集
+common_names <- intersect(MAR_1, SAR_1)
+# 找到 marker_tb_MAR_vs_SAR_up 中独有的 name 值
+unique_MAR_vs_NAR <- setdiff(MAR_1, SAR_1)
+# 找到 marker_tb_SAR_vs_NAR_up 中独有的 name 值
+unique_SAR_vs_NAR <- setdiff(SAR_1, MAR_1)
+
+# 计算每个类别的数量
+common_count <- length(common_names)
+unique_MAR_vs_NAR_count <- length(unique_MAR_vs_NAR)
+unique_SAR_vs_NAR_count <- length(unique_SAR_vs_NAR)
+
+# 将结果合并到一个数据框中
+results <- data.frame(
+  Type = c(rep("Common", common_count),
+           rep("Unique to MAR_vs_NAR", unique_MAR_vs_NAR_count),
+           rep("Unique to SAR_vs_NAR", unique_SAR_vs_NAR_count)),
+  Names = c(common_names, unique_MAR_vs_NAR, unique_SAR_vs_NAR)
+)
+
+# 打印结果
+print("Common names:")
+print(common_names)
+print("Unique names in marker_tb_MAR_vs_NAR_up:")
+print(unique_MAR_vs_NAR)
+print("Unique names in marker_tb_SAR_vs_NAR_up:")
+print(unique_SAR_vs_NAR)
+
+# 打印数量计数
+print("Number of common names:")
+print(common_count)
+print("Number of unique names in marker_tb_MAR_vs_NAR_up:")
+print(unique_MAR_vs_NAR_count)
+print("Number of unique names in marker_tb_SAR_vs_NAR_up:")
+print(unique_SAR_vs_NAR_count)
+
+# print("Number of common names:")
+# [1] "Number of common names:"
+# > print(common_count)
+# [1] 30
+# > print("Number of unique names in marker_tb_MAR_vs_SAR_up:")
+# [1] "Number of unique names in marker_tb_MAR_vs_SAR_up:"
+# > print(unique_MAR_vs_NAR_count)
+# [1] 26
+# > print("Number of unique names in marker_tb_SAR_vs_NAR_up:")
+# [1] "Number of unique names in marker_tb_SAR_vs_NAR_up:"
+# > print(unique_SAR_vs_NAR_count)
+# [1] 24
+
+write.table(results, file = "./Motif/scATAC_down_motif_CD4_Tcm__MAR vs NAR and SAR vs NAR getmarkerfeature TF motif_common or unique_meandiff_0.2.tsv", sep = "\t", row.names = FALSE, quote = FALSE)
+
+
+
+MAR_1 <- data_down$name[data_down$group == "MAR"]
+SAR_1 <- data_down$name[data_down$group == "SAR"]
+
+MAR <- na.omit(MAR_1)
+SAR <- na.omit(SAR_1)
+
+# 创建一个列表来存储这些子集
+venn_data <- list(MAR, SAR)
+
+#install.packages("VennDiagram")
+library(VennDiagram)
+# 绘制韦恩图
+# 计算每个集合的百分比
+total_elements <- length(unique(unlist(venn_data)))
+percentages <- sapply(venn_data, function(x) length(x) / total_elements * 100)
+
+
+# 创建Venn图
+venn.plot <- venn.diagram(
+  x = venn_data,
+  category.names = c("MAR", "SAR"),
+  filename = NULL,
+  output = TRUE,
+  height = 8, width = 10, resolution = 300,
+  fill = c("#51A3A3", "#D5CA67"), # 设置每个集合的颜色
+  cat.cex = 1.5, # 设置类别标签的字体大小
+  cex = 1.5, # 设置数字的字体大小
+  cat.pos = 0, # 设置类别标签的位置
+  cat.dist = 0.05, # 设置类别标签的距离
+  rotation.degree = 0, # 设置旋转角度
+  label.col = "black", # 设置标签颜色
+  cat.col = c( "green", "yellow"), # 设置类别标签颜色
+  print.mode = c("raw", "percent"), # 显示百分比
+  sigdigs = 2 # 设置百分比的小数位数
+)
+
+# 保存为PDF
+pdf("./Motif/venn_diagram_down_motif_CD4_Tcm_vs_NAR_meandiff_0.2.pdf")
+grid.draw(venn.plot)
+dev.off()
+
+
+# 获取每个交集的具体元素
+venn_partitions <- get.venn.partitions(venn_data)
+venn_partitions <-as.data.frame(venn_partitions)
+# 打印每个交集的具体元素
+print(venn_partitions)
+write_tsv(venn_partitions, './Motif/CD4_Tcm_down_motid_venn_partitions_VS_NAR_meandiff_0.2.tsv')
+
+
+# 示例数据
+down_motif_count <- data.frame(
+  category = c("SAR Unique", "MAR Unique", "Shared"),
+  value = c(24, 26, 30)
+)
+
+# 绘制饼图
+# 自定义颜色
+colors <- c("#DB6D6B", "#EFDD80", "#A5CAC5")
+
+# 计算百分比
+down_motif_count$percent <- round(down_motif_count$value / sum(down_motif_count$value) * 100, 2)
+
+# 绘制饼图
+ggplot(down_motif_count, aes(x = "", y = value, fill = category)) +
+  geom_bar(stat = "identity", width = 1) +
+  coord_polar(theta = "y") +
+  theme_void() +
+  theme(legend.position = "right") +
+  labs(fill = "", title = "Down-regulated TF motif") +
+  scale_fill_manual(values = colors) +
+  geom_text(aes(label = paste0(category, "\n", percent, "%")), 
+            position = position_stack(vjust = 0.5), size = 4)
+ggsave('./Motif/Down_TF Motif in CD4_Tcm_VS_NAR_pie_meandiff_0.2.pdf',width = 4.5,height = 4)
+
+
+
+
+####MAR vs SAR and SAR vs NAR getmarkerfeature TF motif####
+####TF motif MAR vs SAR####
+peakMarkers_MAR_vs_SAR_CD4_Tcm <- getMarkerFeatures(
+  projArchR_CD4,
+  useMatrix = "MotifMatrix",
+  useSeqnames = "z",
+  useGroups = 'MAR',
+  bgdGroups = "SAR",maxCells = 500,
+  groupBy = "group_A",
+  bias = c( "TSSEnrichment","log10(nFrags)"),
+  testMethod = "wilcoxon"
+)
+
+rd <- rowData(peakMarkers_MAR_vs_SAR_CD4_Tcm)
+marker_assays_MAR_vs_SAR_CD4_Tcm <- setNames(Reduce(cbind, assays(peakMarkers_MAR_vs_SAR_CD4_Tcm)), nm = names(assays(peakMarkers_MAR_vs_SAR_CD4_Tcm)))
+marker_tb_MAR_vs_SAR_CD4_Tcm <- as.data.frame(cbind(rd, marker_assays_MAR_vs_SAR_CD4_Tcm))
+write.csv(marker_tb_MAR_vs_SAR_CD4_Tcm, './Motif/scATAC_CD4_Tcm_TFmotif_getMarkerFeatures_MAR_vs_SAR.csv')
+
+
+#cut off FDR<0.01 MeanDiff >0.2
+#MAR vs SAR
+marker_tb_MAR_vs_SAR <- read.csv('./Motif/scATAC_CD4_Tcm_TFmotif_getMarkerFeatures_MAR_vs_SAR.csv')
+marker_tb_MAR_vs_SAR_up <- marker_tb_MAR_vs_SAR[marker_tb_MAR_vs_SAR$MeanDiff > 0.2 & marker_tb_MAR_vs_SAR$FDR < 0.05, ]
+marker_tb_MAR_vs_SAR_down <- marker_tb_MAR_vs_SAR[marker_tb_MAR_vs_SAR$MeanDiff < -0.2 & marker_tb_MAR_vs_SAR$FDR < 0.05, ]
+
+marker_tb_MAR_vs_SAR_up <- marker_tb_MAR_vs_SAR_up[order(-marker_tb_MAR_vs_SAR_up$MeanDiff), ]
+marker_tb_MAR_vs_SAR_down <- marker_tb_MAR_vs_SAR_down[order(marker_tb_MAR_vs_SAR_down$MeanDiff), ]
+
+#SAR vs NAR
+marker_tb_SAR_vs_NAR <- read.csv('./Motif/scATAC_CD4_Tcm_TFmotif_getMarkerFeatures.csv')
+marker_tb_SAR_vs_NAR <- marker_tb_SAR_vs_NAR[marker_tb_SAR_vs_NAR$group == "SAR", ]
+marker_tb_SAR_vs_NAR_up <- marker_tb_SAR_vs_NAR[marker_tb_SAR_vs_NAR$MeanDiff > 0.2 & marker_tb_SAR_vs_NAR$FDR < 0.05, ]
+marker_tb_SAR_vs_NAR_down <- marker_tb_SAR_vs_NAR[marker_tb_SAR_vs_NAR$MeanDiff < -0.2 & marker_tb_SAR_vs_NAR$FDR < 0.05, ]
+
+marker_tb_SAR_vs_NAR_up <- marker_tb_SAR_vs_NAR_up[order(-marker_tb_SAR_vs_NAR_up$MeanDiff), ]
+marker_tb_SAR_vs_NAR_down <- marker_tb_SAR_vs_NAR_down[order(marker_tb_SAR_vs_NAR_down$MeanDiff), ]
+head(marker_tb_MAR_vs_SAR_up)
+
+####up_motif####
+## 找到交集
+common_names <- intersect(marker_tb_MAR_vs_SAR_up$name, marker_tb_SAR_vs_NAR_up$name)
+# 找到 marker_tb_MAR_vs_SAR_up 中独有的 name 值
+unique_MAR_vs_SAR <- setdiff(marker_tb_MAR_vs_SAR_up$name, marker_tb_SAR_vs_NAR_up$name)
+# 找到 marker_tb_SAR_vs_NAR_up 中独有的 name 值
+unique_SAR_vs_NAR <- setdiff(marker_tb_SAR_vs_NAR_up$name, marker_tb_MAR_vs_SAR_up$name)
+
+# 计算每个类别的数量
+common_count <- length(common_names)
+unique_MAR_vs_SAR_count <- length(unique_MAR_vs_SAR)
+unique_SAR_vs_NAR_count <- length(unique_SAR_vs_NAR)
+
+# 将结果合并到一个数据框中
+results <- data.frame(
+  Type = c(rep("Common", common_count),
+           rep("Unique to MAR_vs_SAR", unique_MAR_vs_SAR_count),
+           rep("Unique to SAR_vs_NAR", unique_SAR_vs_NAR_count)),
+  Names = c(common_names, unique_MAR_vs_SAR, unique_SAR_vs_NAR)
+)
+
+# 打印结果
+print("Common names:")
+print(common_names)
+print("Unique names in marker_tb_MAR_vs_SAR_up:")
+print(unique_MAR_vs_SAR)
+print("Unique names in marker_tb_SAR_vs_NAR_up:")
+print(unique_SAR_vs_NAR)
+
+# 打印数量计数
+print("Number of common names:")
+print(common_count)
+print("Number of unique names in marker_tb_MAR_vs_SAR_up:")
+print(unique_MAR_vs_SAR_count)
+print("Number of unique names in marker_tb_SAR_vs_NAR_up:")
+print(unique_SAR_vs_NAR_count)
+
+#cutOff meandiff = 0.1
+# print("Number of common names:")
+# [1] "Number of common names:"
+# > print(common_count)
+# [1] 23
+# > print("Number of unique names in marker_tb_MAR_vs_SAR_up:")
+# [1] "Number of unique names in marker_tb_MAR_vs_SAR_up:"
+# > print(unique_MAR_vs_SAR_count)
+# [1] 67
+# > print("Number of unique names in marker_tb_SAR_vs_NAR_up:")
+# [1] "Number of unique names in marker_tb_SAR_vs_NAR_up:"
+# > print(unique_SAR_vs_NAR_count)
+# [1] 83
+
+
+#cutOff meandiff = 0.2
+# print(common_count)
+# [1] 19
+# > print("Number of unique names in marker_tb_MAR_vs_SAR_up:")
+# [1] "Number of unique names in marker_tb_MAR_vs_SAR_up:"
+# > print(unique_MAR_vs_SAR_count)
+# [1] 42
+# > print("Number of unique names in marker_tb_SAR_vs_NAR_up:")
+# [1] "Number of unique names in marker_tb_SAR_vs_NAR_up:"
+# > print(unique_SAR_vs_NAR_count)
+# [1] 50
+
+# 保存结果到一个 tsv 文件中
+write.table(results, file = "./Motif/scATAC_up_motif_CD4_Tcm_activaty_MAR vs SAR and SAR vs NAR getmarkerfeature TF motif_common or unique_meandiff_0.2.tsv", sep = "\t", row.names = FALSE, quote = FALSE)
+
+## 韦恩图绘制
+MAR <- na.omit(marker_tb_MAR_vs_SAR_up$name)
+SAR <- na.omit(marker_tb_SAR_vs_NAR_up$name)
+
+# 创建一个列表来存储这些子集
+venn_data <- list(MAR, SAR)
+
+#install.packages("VennDiagram")
+library(VennDiagram)
+# 绘制韦恩图
+# 计算每个集合的百分比
+total_elements <- length(unique(unlist(venn_data)))
+percentages <- sapply(venn_data, function(x) length(x) / total_elements * 100)
+
+
+# 创建Venn图
+venn.plot <- venn.diagram(
+  x = venn_data,
+  category.names = c("MAR", "SAR"),
+  filename = NULL,
+  output = TRUE,
+  height = 8, width = 10, resolution = 300,
+  fill = c("#51A3A3", "#D5CA67"), # 设置每个集合的颜色
+  cat.cex = 1.5, # 设置类别标签的字体大小
+  cex = 1.5, # 设置数字的字体大小
+  cat.pos = 0, # 设置类别标签的位置
+  cat.dist = 0.05, # 设置类别标签的距离
+  rotation.degree = 0, # 设置旋转角度
+  label.col = "black", # 设置标签颜色
+  cat.col = c( "green", "yellow"), # 设置类别标签颜色
+  print.mode = c("raw", "percent"), # 显示百分比
+  sigdigs = 2 # 设置百分比的小数位数
+)
+
+# 保存为PDF
+pdf("./Motif/venn_diagram_up_motif_CD4_Tcm_MAR vs SAR and SAR vs NAR getmarkerfeature_activaty_meandiff_0.2.pdf")
+grid.draw(venn.plot)
+dev.off()
+
+# 
+# # 获取每个交集的具体元素
+# venn_partitions <- get.venn.partitions(venn_data)
+# venn_partitions <-as.data.frame(venn_partitions)
+# # 打印每个交集的具体元素
+# print(venn_partitions)
+# write_tsv(venn_partitions, './TF_motif/CD8_Trm_up_motid_venn_partitions_.tsv')
+# 示例数据
+up_motif_count <- data.frame(
+  category = c("SAR", "MAR", "Shared"),
+  value = c(50, 42, 19)
+)
+
+# 绘制饼图
+# 自定义颜色
+colors <- c("#D75B58", "#EAD256", "#8DBCB6")
+
+# 计算百分比
+up_motif_count$percent <- round(up_motif_count$value / sum(up_motif_count$value) * 100, 2)
+
+# 绘制饼图
+ggplot(up_motif_count, aes(x = "", y = value, fill = category)) +
+  geom_bar(stat = "identity", width = 1) +
+  coord_polar(theta = "y") +
+  theme_void() +
+  theme(legend.position = "right") +
+  labs(fill = "", title = "Up-regulated TF motif") +
+  scale_fill_manual(values = colors) +
+  geom_text(aes(label = paste0(category, "\n", percent, "%")), 
+            position = position_stack(vjust = 0.5), size = 4)
+ggsave('./Motif/Up_TF Motif in CD4_Tcm_pie_MAR vs SAR and SAR vs NAR getmarkerfeature_ACTIVATY_meandiff_0.2.pdf',width = 4.5,height = 4)
+
+
+####down_motif####
+## 找到交集
+common_names <- intersect(marker_tb_MAR_vs_SAR_down$name, marker_tb_SAR_vs_NAR_down$name)
+# 找到 marker_tb_MAR_vs_SAR_down 中独有的 name 值
+unique_MAR_vs_SAR <- setdiff(marker_tb_MAR_vs_SAR_down$name, marker_tb_SAR_vs_NAR_down$name)
+# 找到 marker_tb_SAR_vs_NAR_down 中独有的 name 值
+unique_SAR_vs_NAR <- setdiff(marker_tb_SAR_vs_NAR_down$name, marker_tb_MAR_vs_SAR_down$name)
+
+# 计算每个类别的数量
+common_count <- length(common_names)
+unique_MAR_vs_SAR_count <- length(unique_MAR_vs_SAR)
+unique_SAR_vs_NAR_count <- length(unique_SAR_vs_NAR)
+
+# 将结果合并到一个数据框中
+results <- data.frame(
+  Type = c(rep("Common", common_count),
+           rep("Unique to MAR_vs_SAR", unique_MAR_vs_SAR_count),
+           rep("Unique to SAR_vs_NAR", unique_SAR_vs_NAR_count)),
+  Names = c(common_names, unique_MAR_vs_SAR, unique_SAR_vs_NAR)
+)
+
+# 打印结果
+print("Common names:")
+print(common_names)
+print("Unique names in marker_tb_MAR_vs_SAR_down:")
+print(unique_MAR_vs_SAR)
+print("Unique names in marker_tb_SAR_vs_NAR_down:")
+print(unique_SAR_vs_NAR)
+
+# 打印数量计数
+print("Number of common names:")
+print(common_count)
+print("Number of unique names in marker_tb_MAR_vs_SAR_down:")
+print(unique_MAR_vs_SAR_count)
+print("Number of unique names in marker_tb_SAR_vs_NAR_down:")
+print(unique_SAR_vs_NAR_count)
+
+#ctuoff meandiff =0.1
+# print("Number of common names:")
+# [1] "Number of common names:"
+# > print(common_count)
+# [1] 1
+# > print("Number of unique names in marker_tb_MAR_vs_SAR_down:")
+# [1] "Number of unique names in marker_tb_MAR_vs_SAR_down:"
+# > print(unique_MAR_vs_SAR_count)
+# [1] 64
+# > print("Number of unique names in marker_tb_SAR_vs_NAR_down:")
+# [1] "Number of unique names in marker_tb_SAR_vs_NAR_down:"
+# > print(unique_SAR_vs_NAR_count)
+# [1] 99
+
+#cutoff meandiff = 0.2
+# print("Number of common names:")
+# [1] "Number of common names:"
+# > print(common_count)
+# 0
+# > print("Number of unique names in marker_tb_MAR_vs_SAR_down:")
+# [1] "Number of unique names in marker_tb_MAR_vs_SAR_down:"
+# > print(unique_MAR_vs_SAR_count)
+# [1] 41
+# > print("Number of unique names in marker_tb_SAR_vs_NAR_down:")
+# [1] "Number of unique names in marker_tb_SAR_vs_NAR_down:"
+# > print(unique_SAR_vs_NAR_count)
+# [1] 54
+
+# 保存结果到一个 tsv 文件中
+write.table(results, file = "./Motif/scATAC_down_motif_CD4_Tcm_MAR vs SAR and SAR vs NAR activate getmarkerfeature TF motif_common or uniquemeandiff_0.2.tsv", sep = "\t", row.names = FALSE, quote = FALSE)
+
+## 韦恩图绘制
+MAR <- na.omit(marker_tb_MAR_vs_SAR_down$name)
+SAR <- na.omit(marker_tb_SAR_vs_NAR_down$name)
+
+# 创建一个列表来存储这些子集
+venn_data <- list(MAR, SAR)
+
+#install.packages("VennDiagram")
+library(VennDiagram)
+# 绘制韦恩图
+# 计算每个集合的百分比
+total_elements <- length(unique(unlist(venn_data)))
+percentages <- sapply(venn_data, function(x) length(x) / total_elements * 100)
+
+
+# 创建Venn图
+venn.plot <- venn.diagram(
+  x = venn_data,
+  category.names = c("MAR", "SAR"),
+  filename = NULL,
+  output = TRUE,
+  height = 8, width = 10, resolution = 300,
+  fill = c("#51A3A3", "#D5CA67"), # 设置每个集合的颜色
+  cat.cex = 1.5, # 设置类别标签的字体大小
+  cex = 1.5, # 设置数字的字体大小
+  cat.pos = 0, # 设置类别标签的位置
+  cat.dist = 0.05, # 设置类别标签的距离
+  rotation.degree = 0, # 设置旋转角度
+  label.col = "black", # 设置标签颜色
+  cat.col = c( "green", "yellow"), # 设置类别标签颜色
+  print.mode = c("raw", "percent"), # 显示百分比
+  sigdigs = 2 # 设置百分比的小数位数
+)
+
+# 保存为PDF
+pdf("./Motif/venn_diagram_down_motif_CD4_Tcm_MAR vs SAR and SAR vs NAR getmarkerfeature_activaty_meandiff_0.02.pdf")
+grid.draw(venn.plot)
+dev.off()
+
+# 
+# # 获取每个交集的具体元素
+# venn_partitions <- get.venn.partitions(venn_data)
+# venn_partitions <-as.data.frame(venn_partitions)
+# # 打印每个交集的具体元素
+# print(venn_partitions)
+# write_tsv(venn_partitions, './TF_motif/CD8_Trm_down_motid_venn_partitions_.tsv')
+# 示例数据
+down_motif_count <- data.frame(
+  category = c("SAR", "MAR", "Shared"),
+  value = c(54, 41, 0)
+)
+
+# 绘制饼图
+# 自定义颜色
+colors <- c("#D75B58", "#EAD256", "#8DBCB6")
+
+# 计算百分比
+down_motif_count$percent <- round(down_motif_count$value / sum(down_motif_count$value) * 100, 2)
+
+# 绘制饼图
+ggplot(down_motif_count, aes(x = "", y = value, fill = category)) +
+  geom_bar(stat = "identity", width = 1) +
+  coord_polar(theta = "y") +
+  theme_void() +
+  theme(legend.position = "right") +
+  labs(fill = "", title = "down-regulated TF motif") +
+  scale_fill_manual(values = colors) +
+  geom_text(aes(label = paste0(category, "\n", percent, "%")), 
+            position = position_stack(vjust = 0.5), size = 4)
+ggsave('./Motif/down_TF Motif in CD4_Tcm_pie_MAR vs SAR and SAR vs NAR getmarkerfeature_activate_meandiff_0.2.pdf',width = 4.5,height = 4)
+
+
+
+####FOOT PRINTING####
+####足迹分析####
+motifPositions_CD4 <- getPositions(projArchR_CD4)
+
+motifs <- c("IRF4")
+markerMotifs_CD4 <- unlist(lapply(motifs, function(x) grep(x, names(motifPositions_CD4), value = TRUE)))
+
+seFoot_CD4 <- getFootprints(
+  ArchRProj = projArchR_CD4, 
+  positions = motifPositions_CD4[markerMotifs_CD4], 
+  groupBy = "group_A"
+)
+
+
+plotFootprints(
+  seFoot = seFoot_CD4,
+  ArchRProj = projArchR_CD4, 
+  normMethod = "Subtract",
+  plotName = "IRF4_Footprints-Subtract-Bias",
+  addDOC = FALSE,
+  smoothWindow = 5
+)
+
+
+####染色质开放性轨迹图####
+plotBrowserTrackSingleGene <- function(ArchRProj, groupBy, geneSymbol, upstream, downstream,
+                                       output_dir,
+                                       addDOC = FALSE) {
+  
+  #无DAP
+  p1 <- plotBrowserTrack(
+    ArchRProj = ArchRProj, 
+    groupBy = groupBy,
+    geneSymbol = geneSymbol,
+    pal = c("NAR" = "#a8a9cb", "SAR" = "#f3b669", "MAR" = "#f08c3c"),
+    useGroups = c("NAR" , "SAR", "MAR"),
+    baseSize = 7,#字体大小
+    borderWidth = 1, 
+    upstream = upstream,
+    downstream = downstream
+  )
+  
+  grid::grid.newpage()
+  grid::grid.draw(p1[[geneSymbol]])
+  
+  plot_name <- paste0(output_dir, "/CD4_Tcm_", geneSymbol, "_groupby_", 
+                      groupBy, "_Plot-Tracks-With-Features.pdf")
+  plotPDF(p1, name = plot_name, width = 4, height = 5, 
+          ArchRProj = ArchRProj, addDOC = addDOC)
+}
+
+plotBrowserTrackSingleGene(projArchR_CD4, 'group_A', 'IL21R', './Gene')
+plotBrowserTrackSingleGene(projArchR_CD4, 'group_A', 'IL21', './Gene')
+plotBrowserTrackSingleGene(projArchR_CD4, 'group_A', 'HMGB1',65000, 5000, './Gene')
+plotBrowserTrackSingleGene(projArchR_CD4, 'group_A', 'IL5R', './Gene')
+plotBrowserTrackSingleGene(projArchR_CD4, 'group_A', 'GZMB', 10000, 10000, './Gene')
+plotBrowserTrackSingleGene(projArchR_CD4, 'group_A', 'IL6R', 10000, 30000, './Gene')
+# plotBrowserTrackSingleGene(projArchR_CD4, 'group_A', 'CCR3', 100000, 30000, './Gene') #远端 ，距离太远
+plotBrowserTrackSingleGene(projArchR_CD4, 'group_A', 'HDAC1', 10000, 30000, './Gene')
+plotBrowserTrackSingleGene(projArchR_CD4, 'group_A', 'CCR5', 10000, 10000, './Gene')
+
+plotBrowserTrackSingleGene(projArchR_CD4, 'group_A', 'SMAD3', 10000, 10000, './Gene')
+plotBrowserTrackSingleGene(projArchR_CD4, 'group_A', 'IL17C', 10000, 10000, './Gene')
+#IL1 PATHWAY
+plotBrowserTrackSingleGene(projArchR_CD4, 'group_A', 'NLRP3', 10000, 10000, './Gene')
+plotBrowserTrackSingleGene(projArchR_CD4, 'group_A', 'RELA', 20000, 10000, './Gene')
+
+
+setwd('/media/AnalysisTempDisk2/Wuyisha/HNM_IMMUNE/ArchR/Downstream/TF_motif/T_cells/ArchRProject_23sample_motif_CD4_Tcm')
+
+####DAP 峰位置确定####
+####DAP####
+# #分组间差异peak
+# markerPeaks_group <- getMarkerFeatures(
+#   ArchRProj = projArchR, 
+#   useMatrix = "PeakMatrix", 
+#   groupBy = "group_A",
+#   bias = c("TSSEnrichment", "log10(nFrags)"),
+#   testMethod = "wilcoxon"
+# )
+# cutOff <- "FDR <= 0.05 & abs(Log2FC) >= 0.25"
+# peakMarkerList <- getMarkers(markerPeaks_group, cutOff = cutOff, returnGR = TRUE)
+#   
+# saveRDS(markerPeaks_group, './CD4_Tcm_marker_feature_group_A.rds')
+# saveRDS(peakMarkerList, './CD4_Tcm_marker_feature_group_A_filter.rds')
+
+# marker_feature <- readRDS('./marker_features_dx.rds')
+# marker_feature
+# # 提取两个 SummarizedExperiment 对象
+# se_sar <- marker_feature[[1]]
+# se_par <- marker_feature[[2]]
+# 
+# # 检查列名
+# colnames(se_sar) <- "SAR"
+# colnames(se_par) <- "PAR"
+# 
+# # 合并两个 SummarizedExperiment 对象
+# combined_se <- cbind(se_sar, se_par)
+# 
+# # 检查合并后的对象
+# print(combined_se)
+
+
+####观察DAR 邻近的gene####
+####CD4_Tcm_peakSet####
+# 获取peak信息
+peakSet <- getPeakSet(projArchR_CD4)
+peakDF <- as.data.frame(peakSet, row.names = NULL)
+write.csv(peakDF, file = "./DAP/CD4_Tcm_peakSet.csv", row.names = FALSE)
+colnames(peakDF)
+
+selected_columns <- c("seqnames", "start", "end", "nearestGene","peakType", "distToTSS" )
+CD4_Tcm_peakSet <- peakDF[selected_columns]
+
+# 生成新列，格式为 "seqnames:start-end"
+CD4_Tcm_peakSet$region <- with(CD4_Tcm_peakSet, paste(seqnames, paste(start, end, sep = "-"), sep = ":"))
+head(CD4_Tcm_peakSet)
+# 保存新矩阵为 CSV 文件
+# write.csv(new_matrix, file = "path/to/your/new_matrix_with_region.csv", row.names = FALSE)
+
+
+##dap_Trm_CD4
+####使用MARvsNAR,以及SAR vs NAR进行组间比较####
+##dap_Trm_CD4
+dap_Trm_CD4 <- readRDS('./marker_features_dx.rds')
+cutOff <- "FDR < 0.1 & abs(Log2FC) > 0.25"
+# 提取两个 SummarizedExperiment 对象
+se_sar <- dap_Trm_CD4[[1]]
+se_par <- dap_Trm_CD4[[2]]
+
+colnames(se_sar) <- "SAR"
+colnames(se_par) <- "PAR"
+
+peakMarkerList_CD4_Tcm <- cbind(se_sar, se_par)
+print(peakMarkerList_CD4_Tcm)
+
+
+dap_Trm_CD4_SAR <- getMarkers(seMarker = dap_Trm_CD4[[1]], cutOff = cutOff, returnGR = TRUE)
+dap_Trm_CD4_data_SAR <- as.data.frame(dap_Trm_CD4_SAR)
+dap_Trm_CD4_PAR <- getMarkers(seMarker = dap_Trm_CD4[[2]], cutOff = cutOff, returnGR = TRUE)
+dap_Trm_CD4_data_PAR <- as.data.frame(dap_Trm_CD4_PAR)
+dap_Trm_CD4_data_group <- rbind(dap_Trm_CD4_data_SAR, dap_Trm_CD4_data_PAR)
+dap_Trm_CD4_data_group$region <- with(dap_Trm_CD4_data_group, paste(seqnames, paste(start, end, sep = "-"), sep = ":"))
+write.csv(dap_Trm_CD4_data_SAR,'./DAP/dap_Trm_CD4_data_SAR_filter.csv')
+write.csv(dap_Trm_CD4_data_PAR,'./DAP/dap_Trm_CD4_data_PAR_filter.csv')
+
+##邻近gene注释
+dap_Trm_CD4_data_group$region <- as.character(dap_Trm_CD4_data_group$region)
+CD4_Tcm_peakSet$region <- as.character(CD4_Tcm_peakSet$region)
+
+# 使用 merge 函数根据 region 列合并两个数据框
+merged_data_CD4_Tcm <- merge(dap_Trm_CD4_data_group, CD4_Tcm_peakSet[, c("region", "nearestGene", "peakType", "distToTSS")], by = "region", all.x = TRUE)
+head(merged_data_CD4_Tcm)
+head(CD4_Tcm_peakSet)
+head(dap_Trm_CD4_data_group)
+write.csv(merged_data_CD4_Tcm, './DAP/CD4_Tcm_DAP_SAR_PAR_nearGene_combined.csv')
+
+plotBrowserTrackSingleGene(projArchR_CD4, 'group_A', 'NLRP3', './Gene')
+plotBrowserTrackSingleGene(projArchR_CD4, 'group_A', 'IL21', './Gene')
+
+
+
+###
+####
+###Co-accessibility####
+# projArchR_co <- addCoAccessibility(
+#   ArchRProj = projArchR,
+#   reducedDims = "Harmony"
+# )
+
+cA <- getCoAccessibility(
+  ArchRProj = projArchR,
+  corCutOff = 0.5,
+  resolution = 1,
+  returnLoops = TRUE
+)
+(cA)[[1]]
+
+cALoops <- cA[[1]]
+cALoops <- cALoops[cALoops$FDR < 10^-10]
+cALoops <- cALoops[rowMins(cbind(cALoops$VarQuantile1,cALoops$VarQuantile2)) > 0.35]
+cALoops
+
+cALoops_data <- as.data.frame(cALoops)
+cALoops_data$region <- with(cALoops_data, paste(seqnames, paste(start, end, sep = "-"), sep = ":"))
+
+CD8_Trm_peakSet <- read.csv('./DAP/CD8_Trm_peakSet.csv')
+CD8_Trm_peakSet$region <- with(CD8_Trm_peakSet, paste(seqnames, paste(start, end, sep = "-"), sep = ":"))
+
+##邻近gene注释
+cALoops_data$region <- as.character(cALoops_data$region)
+CD8_Trm_peakSet$region <- as.character(CD8_Trm_peakSet$region)
+
+# 使用 merge 函数根据 region 列合并两个数据框
+merged_data_co <- merge(cALoops_data, CD8_Trm_peakSet[, c("region", "nearestGene", "peakType", "distToTSS")], by = "region", all.x = TRUE)
+head(merged_data_co)
+head(CD8_Trm_peakSet)
+head(dap_Trm_CD8_data_group)
+write.csv(merged_data_co, './DAP/CD8_Trm_CoAccessibility_nearGene_cALoops_data.csv')
+
+
+markerGenes  <- c(
+  "PLCG2" #Erythroid
+  # "PAX5", "MS4A1", #B-Cell Trajectory
+  # "IL1B", #Monocytes
+  # "IL6", "IL13", "IL4", "GATA3", #TCells
+  # 'BACH2'
+)
+
+p <- plotBrowserTrack(
+  ArchRProj = projArchR, 
+  groupBy = "group_A", 
+  geneSymbol = markerGenes, 
+  upstream = 500000,
+  downstream = 500000,
+  loops = getCoAccessibility(projArchR)
+)
+
+grid::grid.newpage()
+grid::grid.draw(p$CALML6)
+grid::grid.draw(p$RUNX3)
+grid::grid.draw(p$RNH1)
+grid::grid.draw(p$IL21R)
+grid::grid.draw(p$STAT6)
+grid::grid.draw(p$GZMB)
+grid::grid.draw(p$PLCG2)
+
+cA[[1]]
+
+
+p <- plotBrowserTrack(
+  ArchRProj = projArchR, 
+  groupBy = "group_A", 
+  geneSymbol = 'ITGAE', 
+  upstream = 50000,
+  downstream = 50000,
+  loops = getCoAccessibility(projArchR)
+)
+grid::grid.draw(p$ITGAE)
+
+
+
+
+####足迹绘制####
+addArchRGenome("hg38")
+setwd("/media/AnalysisTempDisk2/Wuyisha/HNM_IMMUNE/ArchR/Downstream/TF_motif/T_cells/ArchRProject_23sample_motif_CD4_Tcm")
+
+# 加载 ArchR 项目
+proj_dir <-  '/media/AnalysisTempDisk2/Wuyisha/HNM_IMMUNE/ArchR/Downstream/TF_motif/T_cells/ArchRProject_23sample_motif_CD4_Tcm'
+projArchR_CD4 <- loadArchRProject(proj_dir)
+projArchR_CD4
+
+motifPositions <- getPositions(projArchR_CD4)
+# motifs <- c('RELA', 'REL', 'NFKB1', 'RELB','NFKB2' )
+motifs <- c('CREM')
+
+markerMotifs <- unlist(lapply(motifs, function(x) grep(x, names(motifPositions), value = TRUE)))
+markerMotifs
+
+
+seFoot <- getFootprints(
+  ArchRProj = projArchR_CD4, 
+  positions = motifPositions[markerMotifs], 
+  groupBy = "group_A",
+  minCells = 10,
+  # useGroups = c('SAR', 'MAR')
+)
+
+plotFootprints(
+  seFoot = seFoot,
+  ArchRProj = projArchR_CD4, 
+  # pal = c("SAR" = "#F6C78E", "MAR" = "#f08c3c"),
+  normMethod = "Subtract",flankNorm  = 20 ,
+  plotName = "Footprints-Subtract-Bias_MAR_vs_SAR",
+  addDOC = FALSE,
+  smoothWindow = 5
+  
+)
+
+
+
+
+
+# 获取 ggplot 对象列表
+ggList <- plotFootprints(seFoot, names = c("RELA_722"), plot = FALSE)
+
+# 修改 ggplot 对象，去掉阴影（通常是 geom_ribbon 或类似图层）
+library(ggplot2)
+
+# 自定义函数：移除 geom_ribbon 层
+remove_ribbon <- function(gg) {
+  gg$layers <- gg$layers[sapply(gg$layers, function(x) !inherits(x$geom, "GeomRibbon"))]
+  return(gg)
+}
+
+# 应用到每个 ggplot 对象
+ggList_clean <- lapply(ggList, remove_ribbon)
+
+# 绘图
+for (i in seq_along(ggList_clean)) {
+  print(ggList_clean[[i]])
+}
+
