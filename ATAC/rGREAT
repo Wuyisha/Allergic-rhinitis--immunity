@@ -1,6 +1,10 @@
 setwd("/media/AnalysisTempDisk2/Wuyisha/HNM_IMMUNE/ArchR/Downstream/TF_motif/T_cells/ArchRProject_23sample_peak_calling_T_group_A_CD8_Trm/")
 data <- read.csv('/media/AnalysisTempDisk2/Wuyisha/HNM_IMMUNE/ArchR/Downstream/TF_motif/T_cells/CD8_Trm_DAP_SAR_PAR_nearGene_combined.csv')
 
+#setwd("/media/AnalysisTempDisk2/Wuyisha/HNM_IMMUNE/ArchR/Downstream/TF_motif/T_cells/ArchRProject_23sample_peak_calling_T_group_A_CD4_Tcm/")
+#data <- read.csv('/media/AnalysisTempDisk2/Wuyisha/HNM_IMMUNE/ArchR/Downstream/TF_motif/T_cells/CD4_Tcm_DAP_SAR_PAR_nearGene_combined.csv')
+
+
 #### use rGREAT to annotate the cell-type specific peaks, use all the peaks as background
 library(ggplot2)
 library(rGREAT)
