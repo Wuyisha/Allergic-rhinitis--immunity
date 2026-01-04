@@ -1,0 +1,138 @@
+setwd("/media/AnalysisTempDisk2/Wuyisha/HNM_IMMUNE/ArchR/Downstream/TF_motif/T_cells/ArchRProject_23sample_peak_calling_T_group_A_CD8_Trm/")
+data <- read.csv('/media/AnalysisTempDisk2/Wuyisha/HNM_IMMUNE/ArchR/Downstream/TF_motif/T_cells/CD8_Trm_DAP_SAR_PAR_nearGene_combined.csv')
+
+#### use rGREAT to annotate the cell-type specific peaks, use all the peaks as background
+library(ggplot2)
+library(rGREAT)
+#library(devtools)
+#install.packages("bedr")
+library(bedr)
+
+allpeaks = read.csv("/media/AnalysisTempDisk2/Wuyisha/HNM_IMMUNE/ArchR/Downstream/TF_motif/T_cells/ArchRProject_23sample_peak_calling_T_group_A_CD8_Trm/CD8_Trm_peakSet.csv",head=T)
+allpeaks = allpeaks[,c(1,2,3)]
+allpeaks.loc = paste0(allpeaks[,1], ":", allpeaks[,2], "-", allpeaks[,3])
+allpeaks.loc = bedr.sort.region(allpeaks.loc)
+allpeaks$start <- as.integer(as.character(allpeaks$start))
+allpeaks$end <- as.integer(as.character(allpeaks$end))
+
+problematic_rows <- allpeaks[grep("e\\+", allpeaks$start), ]
+print(problematic_rows)
+
+celltypes <- c('PAR', 'SAR')
+
+for(ct in celltypes){
+  ct <- gsub("/", "_", ct)
+  df <- read.csv(paste0("/media/AnalysisTempDisk2/Wuyisha/HNM_IMMUNE/ArchR/Downstream/TF_motif/T_cells/ArchRProject_23sample_peak_calling_T_group_A_CD8_Trm/dap_Trm_CD8_data_", ct, "_filter.csv"))
+  
+  df <- df %>% filter(Log2FC > 0.25)
+  # do an overlap
+  df.loc = paste0(df[,4], ":", df[,5], "-", df[,6])
+  df.loc = bedr.sort.region(df.loc)
+  df.intersect = bedr.join.region(df.loc,allpeaks.loc)
+  
+  df = unique(df.intersect[,2:4])
+  colnames(df) = colnames(allpeaks)
+  df = df[df$seqnames != ".",]
+  df$start = as.numeric(df$start)
+  df$end = as.numeric(df$end)
+  problematic_rows <- df[grep("e\\+", df$start), ]
+  print(problematic_rows)
+  saveRDS(df, paste0("./DAP/celltype_special_peak/df.", ct, ".specific.rGREAT.out.rds"))
+
+}
+
+
+
+
+all_combined_data <- list()
+
+
+for (celltype in celltypes) {
+  input_file <- paste0("./DAP/celltype_special_peak/_Celltype.specific.peaks.", celltype, ".specific.rGREAT.out.rds")
+  celltype_data <- readRDS(input_file)
+  
+  combined_data <- do.call(rbind, lapply(celltype_data, as.data.frame))
+  
+  combined_data$Celltype <- celltype
+  
+  output_file <- paste0("./DAP/rGREAT/rGREAT_", celltype, "_output.csv")
+  write.csv(combined_data, output_file, row.names = FALSE)
+
+  plot_data <- combined_data[, c("name", "Hyper_Fold_Enrichment", "Hyper_Adjp_BH", "Celltype")]
+  plot_output_file <- paste0("./DAP/rGREAT/_rGREAT_", celltype, "_output_Plot.csv")
+  write.csv(plot_data, plot_output_file, row.names = FALSE)
+
+  all_combined_data[[celltype]] <- plot_data
+}
+
+
+final_combined_data <- do.call(rbind, all_combined_data)
+final_output_file <- "./DAP/rGREAT/_rGREAT_all_celltypes_output_Plot.csv"
+write.csv(final_combined_data, final_output_file, row.names = FALSE)
+print(paste("Final combined CSV file has been exported to:", final_output_file))
+
+
+
+final_combined_data$Log10_PValue <- -log10(final_combined_data$Hyper_Adjp_BH)
+
+name_list <- c(
+
+  "inactivation of MAPK activity",
+  'negative regulation of isotype switching to IgE isotypes',
+ "positive regulation of T cell migration",
+ "positive regulation of interferon-gamma secretion",
+ "cellular response to interleukin-2",
+  'regulation of monocyte differentiation',
+  "positive regulation of Ras protein signal transduction",
+  "positive regulation of Rho protein signal transduction",
+   "T-helper cell differentiation",
+  "SMAD binding"  
+)
+
+
+plot_data <- final_combined_data %>%
+  filter(name %in% name_list)
+
+
+
+
+library(ggplot2)
+library(dplyr)
+table(plot_data$Celltype)
+
+
+
+
+plot_data$Log10_PValue <- -log10(plot_data$Hyper_Adjp_BH)
+plot_data$Log_foldchange <- log2(plot_data$Hyper_Fold_Enrichment)
+plot_data$Celltype <- gsub("PAR", "MAR", plot_data$Celltype)
+
+plot_data$Celltype <- factor(plot_data$Celltype, levels = c( 'SAR', 'MAR'))
+# plot_data$Celltype <- factor(plot_data$Celltype, levels = unique(plot_data$Celltype))
+plot_data$name <- factor(plot_data$name, levels = name_list)
+
+p <- ggplot(plot_data, aes(x = Celltype, y = name)) +
+  geom_point(aes(size = Log10_PValue, color = Log_foldchange)) +
+  scale_size_continuous(range = c(0.5, 7)) +  
+  scale_color_gradientn(colors = c("#cacaca","#fdab67", "#fd8938","#f06511")) + 
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 0),
+    panel.grid.major = element_blank(), 
+    panel.grid.minor = element_blank(), 
+    panel.border = element_rect(color = "black", fill = NA, size = 1)  
+  ) +
+  labs(
+    title = "Dot Plot of Group",
+    x = "",
+    y = "",
+    size = "-Log10(Padj)",
+    color = "Log2FC"
+  )+
+  scale_y_discrete(position = "right") 
+p
+ggsave('./DAP/rGREAT/_celltype_rGREAT.pdf',width = 5.5,height = 4)
+ggsave("./DAP/rGREAT/celltype_rGREAT.tiff", plot = p, width = 5, height = 3.5, dpi = 300)
+
+
+
