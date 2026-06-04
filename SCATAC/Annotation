@@ -1,0 +1,176 @@
+# =========================================================
+# ArchR Downstream Analysis
+# LSI / UMAP / Clustering / Metadata Integration
+# =========================================================
+
+setwd("/media/AnalysisTempDisk2/Wuyisha/HNM_IMMUNE/ArchR/QC")
+
+# ---------------------------------------------------------
+# 1. Load ArchRProject
+# ---------------------------------------------------------
+proj <- loadArchRProject(path = "ArchRProject_23sample_QC")
+
+# Add biological sample annotation
+proj$sample <- gsub("A1|A2|A3|H1|H2|H3", "", proj$Sample)
+
+# ---------------------------------------------------------
+# 2. Add External Metadata
+# ---------------------------------------------------------
+library(readr)
+
+meta <- read_csv(
+  "/media/AnalysisTempDisk2/Wuyisha/HNM_IMMUNE/ATAC/data/meta.data.csv"
+)
+
+# Prepare cell-level metadata
+cell_meta <- data.frame(
+  cell_barcodes = proj$cellNames,
+  sample = proj$sample
+)
+
+# Merge metadata
+cell_meta <- merge(
+  cell_meta,
+  meta,
+  by = "sample",
+  all.x = TRUE
+)
+
+# Add all metadata columns to ArchRProject
+for (col in colnames(cell_meta)) {
+  proj@cellColData[[col]] <- cell_meta[[col]]
+}
+
+# Sanity check
+stopifnot(
+  all.equal(
+    unique(getCellColData(proj)$sample),
+    unique(meta$sample)
+  )
+)
+
+# ---------------------------------------------------------
+# 3. Iterative LSI
+# ---------------------------------------------------------
+proj <- addIterativeLSI(
+  ArchRProj = proj,
+  useMatrix = "TileMatrix",
+  name = "IterativeLSI_HNM",
+  iterations = 2,
+  clusterParams = list(
+    resolution = 0.3,
+    sampleCells = 10000,
+    n.start = 10
+  ),
+  varFeatures = 25000,
+  dimsToUse = 1:30,
+  force = TRUE
+)
+
+# ---------------------------------------------------------
+# 4. Clustering
+# ---------------------------------------------------------
+proj <- addClusters(
+  ArchRProj = proj,
+  reducedDims = "IterativeLSI_HNM",
+  method = "Seurat",
+  name = "Clusters",
+  force = TRUE
+)
+
+# ---------------------------------------------------------
+# 5. UMAP
+# ---------------------------------------------------------
+proj <- addUMAP(
+  ArchRProj = proj,
+  reducedDims = "IterativeLSI_HNM",
+  name = "UMAP",
+  nNeighbors = 40,
+  minDist = 0.3,
+  force = TRUE
+)
+
+# ---------------------------------------------------------
+# 6. Visualization
+# ---------------------------------------------------------
+plotEmbedding(
+  ArchRProj = proj,
+  colorBy = "cellColData",
+  name = "sample",
+  embedding = "UMAP",
+  size = 0.05
+)
+
+plotEmbedding(
+  ArchRProj = proj,
+  colorBy = "cellColData",
+  name = "Clusters",
+  embedding = "UMAP"
+)
+
+plotEmbedding(
+  ArchRProj = proj,
+  colorBy = "cellColData",
+  name = "nFrags",
+  embedding = "UMAP"
+)
+
+plotEmbedding(
+  ArchRProj = proj,
+  colorBy = "cellColData",
+  name = "TSSEnrichment",
+  embedding = "UMAP"
+)
+
+# ---------------------------------------------------------
+# 7. Cluster-wise Sample Composition
+# ---------------------------------------------------------
+clusters <- unique(proj$Clusters)
+
+for (cl in clusters) {
+  
+  cells <- getCellColData(proj) %>%
+    as.data.frame() %>%
+    dplyr::filter(Clusters == cl) %>%
+    pull(cellNames)
+  
+  proj_sub <- proj[cells, ]
+  
+  p <- plotEmbedding(
+    ArchRProj = proj_sub,
+    colorBy = "cellColData",
+    name = "sample",
+    embedding = "UMAP",
+    size = 0.05
+  )
+  
+  plotPDF(
+    p,
+    name = paste0("UMAP_Cluster_", cl, "_bySample.pdf"),
+    ArchRProj = proj,
+    width = 5,
+    height = 5
+  )
+}
+
+# ---------------------------------------------------------
+# 8. Impute Weights (for Gene Score / Annotation)
+# ---------------------------------------------------------
+proj <- addImputeWeights(
+  ArchRProj = proj,
+  reducedDims = "IterativeLSI_HNM",
+  corCutOff = 0.75,
+  td = 3,
+  ka = 4,
+  nRep = 2,
+  k = 15,
+  epsilon = 1,
+  useHdf5 = TRUE,
+  seed = 1,
+  force = TRUE
+)
+
+# =========================================================
+# End of downstream analysis
+# Ready for marker feature & cell type annotation
+# =========================================================
