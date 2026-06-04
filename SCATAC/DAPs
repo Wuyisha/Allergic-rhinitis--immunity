@@ -262,3 +262,140 @@ save_dx_features <- function(proj, marker_list) {
 # 9. Run Pipeline
 # ---------------------------------------------------------
 main(proj_dir, out_dir)
+
+
+
+
+
+# =========================================================
+# DAR Annotation & Genome Browser Tracks
+# Cluster: Macro_CCL3
+# Comparisons: SAR vs NAR, PAR vs NAR
+# =========================================================
+
+library(ArchR)
+library(dplyr)
+library(stringr)
+library(rtracklayer)
+library(GenomicRanges)
+
+# ---------------------------------------------------------
+# 0. Paths
+# ---------------------------------------------------------
+setwd("./DAP")
+
+# ---------------------------------------------------------
+# 1. Extract Peak Set & Nearest Gene Annotation
+# ---------------------------------------------------------
+peakSet <- getPeakSet(projArchR_macro)
+
+peakDF <- as.data.frame(peakSet) %>%
+  dplyr::select(
+    seqnames,
+    start,
+    end,
+    nearestGene,
+    peakType,
+    distToTSS
+  ) %>%
+  mutate(
+    region = paste0(seqnames, ":", start, "-", end)
+  )
+
+write.csv(peakDF, "Macro_CCL3_peakSet.csv", row.names = FALSE)
+
+# ---------------------------------------------------------
+# 2. Load Differential Peak Results
+# ---------------------------------------------------------
+dap <- readRDS("PARker_features_dx.rds")
+
+cutoff <- "FDR < 0.1 & abs(Log2FC) > 0.25"
+
+# SAR vs NAR
+se_sar <- dap[[1]]
+colnames(se_sar) <- "SAR"
+
+# PAR vs NAR
+se_PAR <- dap[[2]]
+colnames(se_PAR) <- "PAR"
+
+# Combine
+se_dap <- cbind(se_sar, se_PAR)
+
+# ---------------------------------------------------------
+# 3. Convert GRanges → DataFrame
+# ---------------------------------------------------------
+dar_sar <- as.data.frame(getPARkers(se_sar, cutOff = cutoff, returnGR = TRUE))
+dar_PAR <- as.data.frame(getPARkers(se_PAR, cutOff = cutoff, returnGR = TRUE))
+
+dar_all <- bind_rows(
+  dar_sar,
+  dar_PAR
+) %>%
+  mutate(
+    region = paste0(seqnames, ":", start, "-", end)
+  )
+
+write.csv(dar_sar, "dap_Macro_CCL3_SAR_filter.csv", row.names = FALSE)
+write.csv(dar_PAR, "dap_Macro_CCL3_PAR_filter.csv", row.names = FALSE)
+
+# ---------------------------------------------------------
+# 4. Annotate DAR with Nearest Gene
+# ---------------------------------------------------------
+peakDF$region <- as.character(peakDF$region)
+dar_all$region <- as.character(dar_all$region)
+
+dar_annot <- merge(
+  dar_all,
+  peakDF[, c("region", "nearestGene", "peakType", "distToTSS")],
+  by = "region",
+  all.x = TRUE
+)
+
+write.csv(
+  dar_annot,
+  "Macro_CCL3_DAP_SAR_PAR_nearGene_combined.csv",
+  row.names = FALSE
+)
+
+# ---------------------------------------------------------
+# 5. Example Gene: TRAF6
+# TLR signaling / Macrophage bactericidal activity
+# chr11:36,411,188–36,411,688
+# ---------------------------------------------------------
+gene_symbol <- "TRAF6"
+
+p <- plotBrowserTrack(
+  ArchRProj = projArchR_motif,
+  groupBy = "group_A",
+  geneSymbol = gene_symbol,
+  useGroups = c("NAR", "SAR", "PAR"),
+  pal = c(
+    "NAR" = "#869C83",
+    "SAR" = "#d4bcda",
+    "PAR" = "#594b98"
+  ),
+  baseSize = 7,
+  borderWidth = 1,
+  minCells = 300,
+  upstream = 105000,
+  downstream = 10000
+)
+
+grid::grid.draw(p[[gene_symbol]])
+
+plotPDF(
+  p,
+  name = paste0("Macro_CCL3_", gene_symbol, "_groupby_groupA_Track.pdf"),
+  ArchRProj = projArchR_motif,
+  width = 4,
+  height = 5
+)
+
+# ---------------------------------------------------------
+# 6. Optional: Batch Genes
+# ---------------------------------------------------------
+# target_genes <- c("TRAF6", "CCL3", "IRF5", "NFKB1")
+# for (g in target_genes) {
+#   p <- plotBrowserTrack(...)
+# }
