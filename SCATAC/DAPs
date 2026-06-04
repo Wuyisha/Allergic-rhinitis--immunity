@@ -1,0 +1,264 @@
+# =========================================================
+# ArchR Myeloid Subset Analysis
+# Peak Calling & Differential Accessibility
+# =========================================================
+
+# ---------------------------------------------------------
+# 1. Environment Setup
+# ---------------------------------------------------------
+library(ArchR)
+library(parallel)
+library(Seurat)
+library(dplyr)
+library(purrr)
+library(stringr)
+library(readr)
+library(tibble)
+
+addArchRThreads(threads = 16)
+set.seed(1)
+addArchRGenome("hg38")
+
+# ---------------------------------------------------------
+# 2. Paths & Parameters
+# ---------------------------------------------------------
+base_dir <- "/media/AnalysisTempDisk2/Wuyisha/HNM_IMMUNE/ArchR"
+
+proj_dir <- file.path(
+  base_dir,
+  "Immune_RNA_transfer/ArchRProject_23sample_RNA_transfer_MY_250818"
+)
+
+out_dir <- file.path(
+  base_dir,
+  "Downstream/TF_motif/My_cells"
+)
+
+setwd(out_dir)
+
+# ---------------------------------------------------------
+# 3. Helper Functions
+# ---------------------------------------------------------
+writeMsg <- function(msg) {
+  msg_width <- getOption("width")
+  cat(str_pad(msg, width = msg_width, side = "both"), "\n")
+}
+
+# ---------------------------------------------------------
+# 4. Main Pipeline
+# ---------------------------------------------------------
+main <- function(proj_dir, out_dir) {
+
+  addArchRThreads(15)
+  start_time <- Sys.time()
+
+  # Load project
+  proj <- loadArchRProject(proj_dir)
+
+  # Remove PAR group
+  cells_keep <- proj@cellColData %>%
+    as_tibble(rownames = "cell_id") %>%
+    filter(!group_A %in% "PAR") %>%
+    pull(cell_id)
+
+  proj <- proj[cells_keep, ]
+
+  # Cluster info
+  cluster_counts <- proj@cellColData %>%
+    as_tibble(rownames = "cell_id") %>%
+    group_by(cluster_RNA_transfer_, group_A) %>%
+    summarise(n = n(), .groups = "drop")
+
+  # Pseudobulk parameters
+  pb_params <- cluster_counts %>%
+    rename(cluster = cluster_RNA_transfer_) %>%
+    group_by(cluster) %>%
+    summarise(
+      minCell = floor(min(n) / 4),
+      maxCell = floor(max(n) / 2)
+    ) %>%
+    mutate(
+      out_dir = file.path(out_dir, paste0("Cluster_", cluster)),
+      minReplicates = 4,
+      maxReplicates = 10,
+      groupBy = "group_A"
+    )
+
+  print(pb_params)
+
+  # Run pseudobulk peak calling
+  pb_projects <- pmap(
+    pb_params,
+    ~ group_coverage_worker(proj_dir, ..1, ..2, ..3, ..4, ..5, ..6, ..7)
+  )
+
+  # Marker features
+  marker_features <- map2(
+    pb_projects,
+    pb_params$maxCell,
+    ~ per_dx_marker_features(.x, .y)
+  )
+
+  # Plot markers
+  walk2(pb_projects, marker_features, plot_dx_markers)
+
+  # Save marker lists
+  walk2(pb_projects, marker_features, save_dx_features)
+
+  end_time <- Sys.time()
+  print(end_time - start_time)
+}
+
+# ---------------------------------------------------------
+# 5. Group Coverage & Peak Calling
+# ---------------------------------------------------------
+group_coverage_worker <- function(
+  proj_dir,
+  test_cluster,
+  minCell,
+  maxCell,
+  minReplicates,
+  maxReplicates,
+  groupBy,
+  out_dir
+) {
+
+  writeMsg(glue("Processing cluster: {test_cluster}"))
+
+  proj <- loadArchRProject(proj_dir)
+  cells_keep <- proj@cellColData %>%
+    as_tibble(rownames = "cell_id") %>%
+    filter(cluster_RNA_transfer_ == test_cluster) %>%
+    pull(cell_id)
+
+  proj <- proj[cells_keep, ]
+
+  # Group coverages
+  proj <- addGroupCoverages(
+    proj,
+    groupBy = groupBy,
+    minCell = minCell,
+    maxCell = maxCell,
+    minReplicates = minReplicates,
+    maxReplicates = maxReplicates,
+    force = TRUE
+  )
+
+  # Peak calling
+  macs2_path <- findMacs2()
+  proj <- addReproduciblePeakSet(
+    proj,
+    groupBy = groupBy,
+    pathToMacs2 = macs2_path
+  )
+
+  # Peak matrix
+  proj <- addPeakMatrix(proj)
+
+  saveArchRProject(proj, out_dir, load = FALSE)
+  return(proj)
+}
+
+# ---------------------------------------------------------
+# 6. Differential Accessible Peaks
+# ---------------------------------------------------------
+per_dx_marker_features <- function(proj, maxCells) {
+
+  writeMsg("Running differential peak analysis")
+
+  dx_list <- c("SAR", "MAR")
+
+  markers <- map(dx_list, function(dx) {
+    getMarkerFeatures(
+      proj,
+      useMatrix = "PeakMatrix",
+      useGroups = dx,
+      bgdGroups = "NAR",
+      groupBy = "group_A",
+      maxCells = maxCells,
+      bias = c("TSSEnrichment", "log10(nFrags)"),
+      testMethod = "wilcoxon"
+    )
+  })
+
+  names(markers) <- dx_list
+  saveRDS(markers, file.path(proj@projectMetadata$outputDirectory, "marker_features_dx.rds"))
+  return(markers)
+}
+
+# ---------------------------------------------------------
+# 7. Visualization
+# ---------------------------------------------------------
+plot_dx_markers <- function(proj, marker_list) {
+
+  cutoff <- "FDR <= 0.1 & abs(Log2FC) >= 0.25"
+
+  walk(marker_list, function(markers) {
+
+    peak_gr <- getMarkers(markers, cutOff = cutoff, returnGR = TRUE)
+
+    if (length(peak_gr) > 0) {
+
+      dx <- names(peak_gr)
+
+      # Volcano plot
+      p1 <- plotMarkers(
+        seMarker = markers,
+        name = dx,
+        cutOff = cutoff,
+        plotAs = "Volcano"
+      )
+      plotPDF(
+        p1,
+        name = glue("Volcano_{dx}"),
+        ArchRProj = proj,
+        width = 8,
+        height = 6
+      )
+
+      # Heatmap
+      p2 <- plotMarkerHeatmap(
+        seMarker = markers,
+        cutOff = cutoff,
+        transpose = TRUE,
+        plotLog2FC = TRUE
+      )
+      plotPDF(
+        p2,
+        name = glue("Heatmap_{dx}"),
+        ArchRProj = proj,
+        width = 8,
+        height = 6
+      )
+    }
+  })
+}
+
+# ---------------------------------------------------------
+# 8. Save Marker Lists
+# ---------------------------------------------------------
+save_dx_features <- function(proj, marker_list) {
+
+  cutoff <- "FDR <= 0.1 & abs(Log2FC) >= 0.25"
+
+  walk(marker_list, function(markers) {
+
+    peak_gr <- getMarkers(markers, cutOff = cutoff, returnGR = TRUE)
+    dx <- names(peak_gr)
+
+    saveRDS(
+      peak_gr[[1]],
+      file.path(proj@projectMetadata$outputDirectory, glue("MarkerPeaks_{dx}.rds"))
+    )
+
+    write_csv(
+      as.data.frame(peak_gr[[1]]),
+      file.path(proj@projectMetadata$outputDirectory, glue("MarkerPeaks_{dx}.csv"))
+    )
+  })
+}
+
+# ---------------------------------------------------------
+# 9. Run Pipeline
+# ---------------------------------------------------------
+main(proj_dir, out_dir)
