@@ -1,0 +1,386 @@
+# =========================================================
+# scRNA-seq Differential Expression Analysis
+# Project: HNM_IMMUNE / Myeloid
+# Comparison: PAR vs NAR
+# =========================================================
+
+rm(list = ls())
+
+library(Seurat)
+library(dplyr)
+library(ggplot2)
+library(ggrepel)
+library(ggrastr)
+library(Matrix)
+
+# ---------------------------------------------------------
+# 1. Load Data & Subset
+# ---------------------------------------------------------
+setwd("/media/AnalysisTempDisk2/Wuyisha/HNM_IMMUNE/RNA/DEG_My/")
+
+seurat_obj <- readRDS(
+  "/media/AnalysisTempDisk2/Wuyisha/HNM_IMMUNE/RNA/data/data_Myeloid.rds"
+)
+
+# Remove PAR samples
+cells_keep <- subset(seurat_obj@meta.data, group_A != "PAR")$cellNames
+seurat_obj <- subset(seurat_obj, cells = cells_keep)
+
+table(seurat_obj$celltype)
+table(seurat_obj$group_A)
+
+# ---------------------------------------------------------
+# 2. DEG per Cell Type
+# ---------------------------------------------------------
+Idents(seurat_obj) <- seurat_obj$group_A
+
+cell_types <- unique(seurat_obj$celltype)
+group1 <- "PAR"
+group2 <- "NAR"
+
+deg_summary <- data.frame(
+  Cell_Type = character(),
+  Num_UP = integer(),
+  Num_DOWN = integer(),
+  stringsAsFactors = FALSE
+)
+
+for (ctype in cell_types) {
+
+  cat("Processing:", ctype, "\n")
+
+  sub_obj <- subset(seurat_obj, subset = celltype == ctype)
+
+  deg <- FindMarkers(
+    sub_obj,
+    ident.1 = group1,
+    ident.2 = group2,
+    min.pct = 0.25,
+    logfc.threshold = 0
+  )
+
+  deg$gene <- rownames(deg)
+
+  # Save raw DEG
+  write.csv(
+    deg,
+    file = paste0(
+      "./DEG_PAR_vs_NAR/Raw/Raw_marker_genes_",
+      ctype, "_", group1, "_vs_", group2, ".csv"
+    ),
+    row.names = TRUE
+  )
+
+  # Filter significant DEGs
+  deg_sig <- deg %>%
+    filter(p_val_adj < 0.05, abs(avg_log2FC) > 0.25)
+
+  write.csv(
+    deg_sig,
+    file = paste0(
+      "./DEG_PAR_vs_NAR/Filter/Filter_marker_genes_",
+      ctype, "_", group1, "_vs_", group2, ".csv"
+    ),
+    row.names = TRUE
+  )
+
+  # Summary
+  deg_summary <- rbind(
+    deg_summary,
+    data.frame(
+      Cell_Type = ctype,
+      Num_UP = sum(deg_sig$avg_log2FC > 0.25),
+      Num_DOWN = sum(deg_sig$avg_log2FC < -0.25)
+    )
+  )
+
+  # Volcano plot
+  ggplot(deg, aes(x = avg_log2FC, y = -log10(p_val_adj))) +
+    geom_point(
+      aes(color = p_val_adj < 0.05 & abs(avg_log2FC) > 0.25),
+      alpha = 0.7
+    ) +
+    scale_color_manual(
+      values = c("grey", "red"),
+      labels = c("Non‑significant", "Significant")
+    ) +
+    labs(
+      title = paste("Volcano:", ctype, group1, "vs", group2),
+      x = "Log2 Fold Change",
+      y = "-log10(Adjusted P‑value)"
+    ) +
+    theme_minimal()
+
+  ggsave(
+    filename = paste0(
+      "./DEG_PAR_vs_NAR/Fig/marker_genes_",
+      ctype, "_", group1, "_vs_", group2, "_volcano.pdf"
+    ),
+    width = 6,
+    height = 5
+  )
+}
+
+write.csv(
+  deg_summary,
+  file = paste0(
+    "./DEG_PAR_vs_NAR/Summary_Up_Down_DEG_",
+    group1, "_vs_", group2, "_FDR_0.05.csv"
+  ),
+  row.names = FALSE
+)
+
+# ---------------------------------------------------------
+# 3. Merge All Raw DEGs
+# ---------------------------------------------------------
+raw_dir <- "./DEG_PAR_vs_NAR/Raw"
+files <- list.files(raw_dir, pattern = "^Raw_marker_genes_.*\\.csv$", full.names = TRUE)
+
+all_deg <- lapply(files, function(f) {
+  dat <- read.csv(f)
+  dat$gene <- rownames(dat)
+  dat$cluster <- sub(
+    "Raw_marker_genes_(.*)_PAR_vs_NAR\\.csv",
+    "\\1",
+    basename(f)
+  )
+  dat
+})
+
+all_deg <- do.call(rbind, all_deg)
+
+write.csv(
+  all_deg,
+  file = paste0(
+    "./DEG_PAR_vs_NAR/My_Raw_DEG_allcelltype_",
+    group1, "_vs_", group2, ".csv"
+  ),
+  row.names = FALSE
+)
+
+# ---------------------------------------------------------
+# 4. Example: Macro_CCL3 Volcano (Clean Style)
+# ---------------------------------------------------------
+deg_macro <- read.csv(
+  "./DEG_PAR_vs_NAR/Filter/Filter_marker_genes_Macro_CCL3_SAR_vs_NAR.csv"
+)
+
+# Remove Ig / HLA / ribosomal genes
+deg_macro <- deg_macro %>%
+  filter(
+    !grepl("^IG", gene),
+    !grepl("^HLA-", gene),
+    !grepl("^RPS", gene),
+    !grepl("^RPL", gene)
+  )
+
+# Top genes
+top_genes <- deg_macro %>%
+  arrange(avg_log2FC) %>%
+  slice(c(1:7, (n() - 6):n())) %>%
+  pull(gene)
+
+deg_macro$Topranked <- ifelse(
+  deg_macro$gene %in% top_genes,
+  "Top‑ranked",
+  "Others"
+)
+
+deg_macro$Significance <- case_when(
+  p_val_adj < 0.05 & avg_log2FC > 0.25 ~ "UP",
+  p_val_adj < 0.05 & avg_log2FC < -0.25 ~ "DW",
+  TRUE ~ "Others"
+)
+
+deg_macro$pAdj.log <- -log10(deg_macro$p_val_adj)
+
+ggplot(deg_macro, aes(x = avg_log2FC, y = pAdj.log)) +
+  geom_point_rast(aes(color = Significance), size = 1.2) +
+  scale_color_manual(
+    values = c("UP" = "#c1add1", "DW" = "#A9C0C7", "Others" = "grey")
+  ) +
+  geom_vline(xintercept = c(-0.25, 0.25), linetype = "dashed") +
+  geom_text_repel(
+    data = subset(deg_macro, Topranked == "Top‑ranked"),
+    aes(label = gene),
+    size = 4,
+    fontface = "italic"
+  ) +
+  labs(
+    title = "Macro_CCL3 SAR vs NAR",
+    x = "Log2 Fold Change",
+    y = "-log10(Adjusted P‑value)"
+  ) +
+  theme_classic(base_size = 12)
+
+ggsave(
+  "./DEG_PAR_vs_NAR/Fig/Macro_CCL3_SAR_VS_NAR_Volcano.pdf",
+  width = 6,
+  height = 6
+)
+
+# =========================================================
+# End of DEG pipeline
+# Ready for pathway / GSEA / TF enrichment
+# =========================================================
+
+
+
+
+
+
+
+
+# =========================================================
+# scRNA-seq DEG Functional Enrichment
+# Project: HNM_IMMUNE
+# Comparison: PAR vs NAR
+# =========================================================
+
+rm(list = ls())
+
+library(Seurat)
+library(dplyr)
+library(ggplot2)
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(msigdbr)
+
+# ---------------------------------------------------------
+# 1. Load DEG Data
+# ---------------------------------------------------------
+setwd("/media/AnalysisTempDisk2/Wuyisha/HNM_IMMUNE/RNA/DEG_My/DEG_PAR_vs_NAR/")
+
+deg <- read.csv("My_Raw_DEG_allcelltype_PAR_vs_NAR.csv")
+deg <- deg[order(deg$avg_log2FC, decreasing = TRUE), ]
+
+celltypes <- unique(deg$cluster)
+
+
+# ---------------------------------------------------------
+# 3. GO Enrichment (ALL Ontology)
+# ---------------------------------------------------------
+go_dir <- "./GO/"
+dir.create(go_dir, recursive = TRUE, showWarnings = FALSE)
+
+for (ctype in celltypes) {
+
+  cat("GO:", ctype, "\n")
+
+  sub_deg <- deg %>%
+    filter(cluster == ctype, p_val_adj < 0.05, abs(avg_log2FC) > 0.25)
+
+  if (nrow(sub_deg) == 0) next
+
+  go_res <- enrichGO(
+    gene = sub_deg$gene,
+    OrgDb = org.Hs.eg.db,
+    keyType = "SYMBOL",
+    ont = "ALL",
+    pAdjustMethod = "BH",
+    pvalueCutoff = 0.1,
+    qvalueCutoff = 0.1
+  )
+
+  if (is.null(go_res)) next
+
+  write.csv(
+    as.data.frame(go_res),
+    file = file.path(go_dir, paste0(ctype, "_GO_enrichment.csv")),
+    row.names = FALSE
+  )
+}
+
+# ---------------------------------------------------------
+# 4. Merge GO Results Across Cell Types
+# ---------------------------------------------------------
+go_files <- list.files(go_dir, pattern = "_GO_enrichment\\.csv$", full.names = TRUE)
+
+go_all <- lapply(go_files, function(f) {
+  dat <- read.csv(f)
+  dat$cluster <- sub("_GO_enrichment\\.csv", "", basename(f))
+  dat
+})
+
+go_all <- bind_rows(go_all)
+go_all <- go_all %>% filter(p.adjust < 0.05)
+
+write.csv(
+  go_all,
+  file = "./ALL_celltype_GO_enrichment.csv",
+  row.names = FALSE
+)
+
+# ---------------------------------------------------------
+# 5. Visualization: GO Barplot per Cell Type
+# ---------------------------------------------------------
+color_map <- read.csv(
+  "/media/AnalysisTempDisk2/Wuyisha/RNA/HNM10/cell_type_L2_label.csv"
+)
+color_dict <- setNames(color_map$color, color_map$label)
+
+plot_go_barplot <- function(ctype) {
+
+  dat <- go_all %>% filter(cluster == ctype)
+  if (nrow(dat) == 0) return(NULL)
+
+  dat <- dat %>% arrange(desc(-log10(p.adjust)))
+  dat$Description <- factor(dat$Description, levels = dat$Description)
+
+  ggplot(dat, aes(x = -log10(p.adjust), y = Description, fill = cluster)) +
+    geom_bar(stat = "identity", width = 0.5) +
+    scale_fill_manual(values = color_dict) +
+    theme_classic() +
+    labs(
+      title = paste("GO Enrichment:", ctype),
+      x = "-log10(Padj)",
+      y = NULL
+    ) +
+    scale_y_discrete(limits = rev)
+
+  ggsave(
+    paste0("./GO/GO_barplot_", ctype, ".pdf"),
+    width = 8,
+    height = 6
+  )
+}
+
+lapply(celltypes, plot_go_barplot)
+
+# ---------------------------------------------------------
+# 6. Optional: GO Term Label Overlay
+# ---------------------------------------------------------
+for (ctype in celltypes) {
+
+  dat <- go_all %>% filter(cluster == ctype)
+  if (nrow(dat) == 0) next
+
+  dat <- dat %>% arrange(-log10(p.adjust))
+  dat$Description <- factor(dat$Description, levels = dat$Description)
+
+  p <- ggplot(dat, aes(x = -log10(p.adjust), y = Description, fill = cluster)) +
+    geom_bar(stat = "identity", width = 0.5) +
+    geom_text(
+      aes(x = 0.1, y = Description, label = Description),
+      hjust = 0,
+      size = 2.5
+    ) +
+    scale_fill_manual(values = color_dict) +
+    theme_classic() +
+    theme(axis.text.y = element_blank()) +
+    labs(x = "-log10(Padj)", y = NULL)
+
+  ggsave(
+    paste0("./GO/GO_barplot_label_", ctype, ".pdf"),
+    width = 8,
+    height = 6
+  )
+}
+
+# =========================================================
+# End of functional enrichment pipeline
+# Ready for figure assembly / manuscript
+# =========================================================
+
+
+
