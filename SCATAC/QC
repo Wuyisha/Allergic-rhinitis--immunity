@@ -1,1 +1,155 @@
 
+# =========================================================
+# scATAC-seq Analysis Pipeline (ArchR)
+# Author: Wuyisha
+# Project: HNM_IMMUNE
+# =========================================================
+
+# ---------------------------------------------------------
+# 1. Environment Setup
+# ---------------------------------------------------------
+rm(list = ls())
+setwd("/media/AnalysisTempDisk2/Wuyisha/HNM_IMMUNE/ArchR/RAW")
+
+library(ArchR)
+library(parallel)
+library(Seurat)
+library(dplyr)
+
+addArchRThreads(threads = 16)
+set.seed(1)
+addArchRGenome("hg38")
+
+# ---------------------------------------------------------
+# 2. Sample List Definition
+# ---------------------------------------------------------
+inputdir <- "/media/RawData/14.NasalMucosa/ATAC/V2/"
+
+sample_names <- c(
+  'HNM04A2','HNM05A1','HNM07A3','HNM09H3','HNM10H2','HNM10H3','HNM14A2',
+  'HNM17H1','HNM17H2','HNM17H3','HNM19A1','HNM19A2','HNM19A3','HNM20H1',
+  'HNM20H2','HNM20H3','HNM21A1','HNM21A2','HNM21A3','HNM22H1','HNM22H2',
+  'HNM22H3','HNM23H1','HNM23H2','HNM23H3','HNM24A1','HNM25A2','HNM25A3',
+  'HNM26A1','HNM26A3','HNM27A1','HNM27A2','HNM30A1','HNM31H1','HNM31H2',
+  'HNM31H3','HNM32A1','HNM32A2','HNM33H2','HNM33H3','HNM34A3','HNM35A1',
+  'HNM35A2','HNM35A3','HNM36A1','HNM36A2','HNM36A3'
+)
+
+# ---------------------------------------------------------
+# 3. Create Arrow Files
+# ---------------------------------------------------------
+ArrowFiles <- list()
+
+for (sample_name in sample_names) {
+  
+  # Fragment file
+  frag_file <- list.files(
+    path = file.path(inputdir, sample_name),
+    pattern = "\\.tsv\\.gz$",
+    full.names = TRUE
+  )[1]
+  
+  # Valid barcodes from metadata
+  meta <- read.csv(
+    file.path(inputdir, sample_name, "singlecell.csv"),
+    row.names = 1
+  )
+  valid_barcodes <- rownames(meta[meta$is_cell_barcode == 1, ])
+  
+  # Create Arrow
+  ArrowFiles[[sample_name]] <- createArrowFiles(
+    inputFiles = frag_file,
+    sampleNames = sample_name,
+    minFrags = 1000,
+    minTSS = 4,
+    addTileMat = TRUE,
+    addGeneScoreMat = TRUE,
+    validBarcodes = valid_barcodes,
+    threads = 16,
+    force = TRUE
+  )
+}
+
+# ---------------------------------------------------------
+# 4. Initialize ArchRProject (Raw)
+# ---------------------------------------------------------
+ArrowFiles_chr <- unlist(ArrowFiles)
+
+proj <- ArchRProject(
+  ArrowFiles = ArrowFiles_chr,
+  outputDirectory = "ArchRProject_23sample",
+  copyArrows = TRUE
+)
+
+saveArchRProject(
+  ArchRProj = proj,
+  outputDirectory = "ArchRProject_23sample_Raw",
+  load = FALSE
+)
+
+# ---------------------------------------------------------
+# 5. Add Biological Sample Annotation
+# ---------------------------------------------------------
+proj$BioNames <- gsub("A1|A2|A3|H1|H2|H3", "", proj$Sample)
+
+# ---------------------------------------------------------
+# 6. Doublet Scoring
+# ---------------------------------------------------------
+proj <- addDoubletScores(
+  input = proj,
+  k = 10,
+  knnMethod = "UMAP",
+  LSIMethod = 1
+)
+
+# ---------------------------------------------------------
+# 7. Quality Control Filtering
+# ---------------------------------------------------------
+cellColData <- getCellColData(proj, 
+  select = c("Sample", "BioNames", "nFrags", "TSSEnrichment",
+             "ReadsInBlacklist", "NucleosomeRatio")
+)
+
+librarys <- unique(cellColData$Sample)
+filtered_list <- list()
+
+for (lib in librarys) {
+  
+  data_sub <- cellColData[cellColData$Sample == lib, ]
+  
+  # Thresholds
+  frag_q   <- quantile(data_sub$nFrags, c(0.05, 0.95), na.rm = TRUE)
+  nuc_q    <- quantile(data_sub$NucleosomeRatio, 0.95, na.rm = TRUE)
+  tss_q    <- quantile(data_sub$TSSEnrichment, 0.1, na.rm = TRUE)
+  black_q  <- quantile(data_sub$ReadsInBlacklist, 0.95, na.rm = TRUE)
+  
+  # Filtering
+  data_sub <- data_sub[
+    data_sub$nFrags < frag_q[2] &
+    data_sub$NucleosomeRatio < nuc_q &
+    data_sub$TSSEnrichment < 25 &
+    data_sub$ReadsInBlacklist < black_q,
+  ]
+  
+  filtered_list[[lib]] <- data_sub
+}
+
+# Combine filtered cells
+filter_data_all <- do.call(rbind, filtered_list)
+
+# Subset project
+proj_filtered <- proj[proj$cellNames %in% rownames(filter_data_all), ]
+
+# Remove doublets
+proj_qc <- filterDoublets(proj_filtered, filterRatio = 2)
+
+# ---------------------------------------------------------
+# 8. Save QCed Project
+# ---------------------------------------------------------
+setwd("/media/AnalysisTempDisk2/Wuyisha/HNM_IMMUNE/ArchR/QC")
+
+saveArchRProject(
+  ArchRProj = proj_qc,
+  outputDirectory = "ArchRProject_23sample_QC",
+  load = FALSE
+)
