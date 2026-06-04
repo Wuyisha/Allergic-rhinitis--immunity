@@ -1,1 +1,157 @@
+# =========================================================
+# scRNA-seq Preprocessing Pipeline
+# Samples: HNM (Nasal Mucosa)
+# =========================================================
 
+rm(list = ls())
+
+library(Seurat)
+library(dplyr)
+library(ggplot2)
+library(DoubletFinder)
+library(stringr)
+
+# ---------------------------------------------------------
+# 1. Load Raw Data
+# ---------------------------------------------------------
+base_dir <- "/media/RawData/14.NasalMucosa/RNA/SpliceMatrix_B1_ATAC_match"
+sample_ids <- list.files(base_dir)
+
+data_list <- lapply(sample_ids, function(sid) {
+  cat("Loading:", sid, "\n")
+  count_dir <- file.path(base_dir, sid, "04.Matrix/SpliceMatrix/")
+  counts <- Read10X(count_dir, gene.column = 1)
+  CreateSeuratObject(
+    counts = counts,
+    project = sid,
+    min.cells = 3,
+    min.features = 200
+  )
+})
+
+names(data_list) <- sample_ids
+
+# Cell number summary
+sapply(data_list, function(x) ncol(x))
+
+# ---------------------------------------------------------
+# 2. Per-sample QC & Filtering
+# ---------------------------------------------------------
+qc_vln <- function(obj) {
+  obj <- PercentageFeatureSet(obj, "^MT-", col.name = "percent_mito")
+  obj <- PercentageFeatureSet(obj, "^RP[SL]", col.name = "percent_ribo")
+  obj <- PercentageFeatureSet(obj, "^Hb[^(p)]", col.name = "percent_hb")
+  obj
+}
+
+data_list <- lapply(data_list, qc_vln)
+
+# Plot QC before filtering
+lapply(data_list, function(obj) {
+  VlnPlot(
+    obj,
+    features = c("nFeature_RNA", "nCount_RNA", "percent_mito"),
+    ncol = 3,
+    pt.size = 0.2
+  )
+})
+
+# Filtering
+data_list <- lapply(data_list, function(obj) {
+  nF_q <- quantile(obj$nFeature_RNA, c(0.05, 0.95))
+  mt_q <- quantile(obj$percent_mito, 0.9)
+  subset(
+    obj,
+    subset =
+      nFeature_RNA > nF_q[1] &
+      nFeature_RNA < nF_q[2] &
+      percent_mito < mt_q[1]
+  )
+})
+
+# ---------------------------------------------------------
+# 3. Normalization & PCA
+# ---------------------------------------------------------
+data_list <- lapply(data_list, function(obj) {
+  obj %>%
+    NormalizeData(
+      normalization.method = "LogNormalize",
+      scale.factor = 1e4
+    ) %>%
+    FindVariableFeatures(selection.method = "vst", nfeatures = 3000) %>%
+    ScaleData() %>%
+    RunPCA(npcs = 40, verbose = FALSE)
+})
+
+# ---------------------------------------------------------
+# 4. Doublet Removal (DoubletFinder)
+# ---------------------------------------------------------
+data_list <- lapply(data_list, function(obj) {
+  sweep.res <- paramSweep_v3(obj, PCs = 1:30)
+  sweep.stats <- summarizeSweep(sweep.res, GT = FALSE)
+  pk <- find.pK(sweep.stats)$pK[which.max(sweep.stats$BCmetric)]
+  nExp <- round(0.023 * ncol(obj))
+
+  obj <- doubletFinder_v3(
+    obj,
+    PCs = 1:30,
+    pN = 0.05,
+    pK = pk,
+    nExp = nExp,
+    reuse.pANN = FALSE
+  )
+
+  df_col <- grep("DF.classifications", colnames(obj@meta.data), value = TRUE)[1]
+  obj$Singlet <- ifelse(obj@meta.data[[df_col]] == "Singlet", "Singlet", "Doublet")
+  subset(obj, subset = Singlet == "Singlet")
+})
+
+# Cell number after doublet removal
+sapply(data_list, function(x) ncol(x))
+
+# ---------------------------------------------------------
+# 5. Re-normalization & UMAP
+# ---------------------------------------------------------
+data_list <- lapply(data_list, function(obj) {
+  obj %>%
+    NormalizeData(verbose = FALSE) %>%
+    FindVariableFeatures(selection.method = "vst", nfeatures = 3000) %>%
+    ScaleData(verbose = FALSE) %>%
+    RunPCA(npcs = 30, verbose = FALSE) %>%
+    RunUMAP(dims = 1:30, n.neighbors = 30, min.dist = 0.3)
+})
+
+# ---------------------------------------------------------
+# 6. Merge & Integration
+# ---------------------------------------------------------
+setwd("/media/AnalysisTempDisk2/Wuyisha/HNM_IMMUNE/RNA")
+
+saveRDS(data_list, "HNM_24samples_list.rds")
+
+seurat_merged <- merge(
+  x = data_list[[1]],
+  y = data_list[-1],
+  project = "HNM_RNA"
+)
+
+seurat_merged
+# An object of class Seurat
+# 35124 features across 339405 samples within 1 assay
+# Active assay: RNA
+
+saveRDS(seurat_merged, "HNM_24samples_data.rds")
+
+# ---------------------------------------------------------
+# 7. Quick Visualization
+# ---------------------------------------------------------
+DimPlot(
+  seurat_merged,
+  reduction = "umap",
+  group.by = "orig.ident",
+  raster = FALSE
+)
+
+# =========================================================
+# End of preprocessing pipeline
+# Ready for clustering / annotation / integration
+# =========================================================
