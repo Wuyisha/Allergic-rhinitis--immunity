@@ -1,0 +1,229 @@
+# =========================================================
+# ArchR TF Motif Deviation Analysis
+# Cluster: Macro_CCL3
+# Comparisons: SAR vs NAR, PAR vs NAR, PAR vs SAR
+# =========================================================
+
+library(ArchR)
+library(dplyr)
+library(ggplot2)
+library(ggrepel)
+library(VennDiagram)
+library(patchwork)
+library(RColorBrewer)
+
+# ---------------------------------------------------------
+# 1. Add Motif Annotations & Deviations
+# ---------------------------------------------------------
+projArchR_macro <- addMotifAnnotations(
+  ArchRProj = projArchR_macro,
+  motifSet = "cisbp",
+  name = "Motif"
+)
+
+projArchR_macro <- addBgdPeaks(projArchR_macro)
+
+projArchR_motif <- addDeviationsMatrix(
+  ArchRProj = projArchR_macro,
+  peakAnnotation = "Motif",
+  force = TRUE
+)
+
+getAvailableMatrices(projArchR_motif)
+
+# ---------------------------------------------------------
+# 2. Differential Motif Activity
+# ---------------------------------------------------------
+run_motif_PARker <- function(use_group, bgd_group) {
+  getPARkerFeatures(
+    projArchR_motif,
+    useMatrix = "MotifMatrix",
+    useSeqnames = "z",
+    useGroups = use_group,
+    bgdGroups = bgd_group,
+    maxCells = 2344,
+    groupBy = "group_A",
+    bias = c("TSSEnrichment", "log10(nFrags)"),
+    testMethod = "wilcoxon"
+  )
+}
+
+# SAR vs NAR
+se_sar_nar <- run_motif_PARker("SAR", "NAR")
+se_PAR_nar <- run_motif_PARker("PAR", "NAR")
+se_PAR_sar <- run_motif_PARker("PAR", "SAR")
+
+# ---------------------------------------------------------
+# 3. Format PARker Results
+# ---------------------------------------------------------
+format_PARker_tb <- function(se, group_name) {
+  rd <- rowData(se)
+  assays_mat <- Reduce(cbind, assays(se))
+  colnames(assays_mat) <- names(assays(se))
+  cbind(as.data.frame(rd), assays_mat) %>%
+    mutate(group = group_name)
+}
+
+PARker_sar_nar <- format_PARker_tb(se_sar_nar, "SAR vs NAR")
+PARker_PAR_nar <- format_PARker_tb(se_PAR_nar, "PAR vs NAR")
+PARker_PAR_sar <- format_PARker_tb(se_PAR_sar, "PAR vs SAR")
+
+# Combine
+PARker_all <- bind_rows(PARker_sar_nar, PARker_PAR_nar, PARker_PAR_sar)
+
+write.csv(
+  PARker_all,
+  "./Motif/scATAC_Macro_CCL3_TFmotif_getPARkerFeatures.csv",
+  row.names = FALSE
+)
+
+# ---------------------------------------------------------
+# 4. Filter Significant Motifs
+# ---------------------------------------------------------
+cutoff <- abs(MeanDiff) > 0.2 & FDR < 0.05
+
+PARker_sig <- PARker_all %>% filter(cutoff)
+write.csv(
+  PARker_sig,
+  "./Motif/scATAC_Macro_CCL3_TFmotif_getPARkerFeatures_motif_0.2_0.05.csv",
+  row.names = FALSE
+)
+
+# ---------------------------------------------------------
+# 5. Upregulated Motif Overlap (PAR vs SAR & SAR vs NAR)
+# ---------------------------------------------------------
+up_PAR_sar <- PARker_sig %>%
+  filter(group == "PAR vs SAR" & MeanDiff > 0) %>%
+  pull(name)
+
+up_sar_nar <- PARker_sig %>%
+  filter(group == "SAR vs NAR" & MeanDiff > 0) %>%
+  pull(name)
+
+venn_list <- list(
+  `PAR vs SAR` = up_PAR_sar,
+  `SAR vs NAR` = up_sar_nar
+)
+
+# Venn diagram
+pdf("./Motif/venn_diagram_up_motif_Macro_CCL3.pdf", width = 8, height = 8)
+grid.draw(
+  venn.diagram(
+    x = venn_list,
+    category.names = names(venn_list),
+    filename = NULL,
+    fill = c("#51A3A3", "#D5CA67"),
+    cat.cex = 1.3,
+    cex = 1.2
+  )
+)
+dev.off()
+
+# Pie chart
+pie_df <- data.frame(
+  category = c("SAR vs NAR", "PAR vs SAR", "Shared"),
+  value = c(
+    length(setdiff(up_sar_nar, up_PAR_sar)),
+    length(setdiff(up_PAR_sar, up_sar_nar)),
+    length(intersect(up_PAR_sar, up_sar_nar))
+  )
+)
+
+ggplot(pie_df, aes(x = "", y = value, fill = category)) +
+  geom_bar(stat = "identity", width = 1) +
+  coord_polar("y") +
+  scale_fill_manual(values = c("#D75B58", "#EAD256", "#8DBCB6")) +
+  theme_void() +
+  labs(title = "Up-regulated TF motifs")
+
+ggsave(
+  "./Motif/Up_TF_Motif_in_Macro_CCL3_pie.pdf",
+  width = 4.5,
+  height = 4
+)
+
+# ---------------------------------------------------------
+# 6. Volcano Plot (SAR vs NAR)
+# ---------------------------------------------------------
+volcano_df <- PARker_all %>%
+  filter(group == "SAR vs NAR") %>%
+  mutate(
+    sig = case_when(
+      MeanDiff > 0.2 & FDR < 0.05 ~ "Up",
+      MeanDiff < -0.2 & FDR < 0.05 ~ "Down",
+      TRUE ~ "NotSig"
+    ),
+    negLogP = -log10(FDR),
+    rank = rank(-MeanDiff)
+  )
+
+label_df <- bind_rows(
+  volcano_df %>% filter(sig == "Up") %>% slice_max(MeanDiff, n = 5),
+  volcano_df %>% filter(sig == "Down") %>% slice_min(MeanDiff, n = 5)
+)
+
+ggplot(volcano_df, aes(x = rank, y = MeanDiff, color = negLogP)) +
+  geom_point(size = 2.5, alpha = 0.8) +
+  scale_color_gradient2(
+    low = "#87c89f",
+    mid = "#a8a9cb",
+    high = "#423a85"
+  ) +
+  geom_hline(yintercept = 0, linetype = "dotted") +
+  geom_text_repel(
+    data = label_df,
+    aes(label = name),
+    size = 4
+  ) +
+  labs(
+    title = "SAR vs NAR TF Motif",
+    x = "Rank of MeanDiff",
+    y = "MeanDiff"
+  ) +
+  theme_bw()
+
+ggsave(
+  "./Motif/Volcano_TF_Motif_Macro_CCL3_SAR_vs_NAR.pdf",
+  width = 4.5,
+  height = 4
+)
+
+# ---------------------------------------------------------
+# 7. STAT3 Motif Deviation
+# ---------------------------------------------------------
+stat3 <- getPARkerFeatures(
+  projArchR_motif,
+  useMatrix = "MotifMatrix",
+  useSeqnames = "z",
+  useGroups = "SAR",
+  bgdGroups = "NAR",
+  groupBy = "group_A"
+)
+
+stat3_data <- stat3$`z:STAT3_777`$data
+stat3_data$group <- factor(stat3_data$x, levels = c("NAR", "SAR", "PAR"))
+
+# Kruskal–Wallis test
+kruskal.test(y ~ group, data = stat3_data)
+
+# Violin + boxplot
+ggplot(stat3_data, aes(x = group, y = y, fill = group)) +
+  geom_violin(scale = "width", width = 0.8) +
+  geom_boxplot(width = 0.2, outlier.shape = NA) +
+  scale_fill_manual(values = c("#a8a9cb", "#f3b669", "#f08c3c")) +
+  labs(
+    title = "STAT3 Motif Deviation",
+    y = "Motif deviation",
+    x = ""
+  ) +
+  theme_classic()
+
+ggsave(
+  "./Motif/violin_Motif_deviation_z_STAT3_by_group_A.pdf",
+  width = 7,
+  height = 5
+)
+
+# =========================================================
+# End of Macro_CCL3 TF motif analysis
+# =========================================================
