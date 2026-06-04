@@ -1,0 +1,190 @@
+# =========================================================
+# CellChat Pipeline
+# Project: HNM_IMMUNE
+# Groups: NAR / SAR / MAR
+# =========================================================
+
+rm(list = ls())
+
+library(CellChat)
+library(Seurat)
+library(dplyr)
+library(patchwork)
+
+setwd("/media/AnalysisTempDisk2/Wuyisha/HNM_IMMUNE/RNA/cellchat")
+
+# ---------------------------------------------------------
+# 1. Load Seurat Object
+# ---------------------------------------------------------
+seurat_all <- readRDS(
+  "/media/AnalysisTempDisk2/Wuyisha/HNM_IMMUNE/RNA/data/HNM_23samples_data_4_immune_cells_1.rds"
+)
+
+table(seurat_all$group_A)
+table(seurat_all$subtype)
+
+# Remove PAR
+seurat_all <- subset(seurat_all, cells = rownames(subset(seurat_all@meta.data, group_A != "PAR")))
+
+# ---------------------------------------------------------
+# 2. CellChat Construction Function
+# ---------------------------------------------------------
+run_cellchat <- function(obj, group_col = "subtype") {
+
+  Idents(obj) <- obj[[group_col]]
+
+  cellchat <- createCellChat(
+    object = obj,
+    group.by = "ident",
+    assay = "RNA"
+  )
+
+  cellchat <- addMeta(cellchat, meta = obj@meta.data)
+  cellchat@DB <- CellChatDB.human
+
+  # Subset signaling genes
+  cellchat <- subsetData(cellchat)
+
+  # Over‑expressed interactions
+  options(future.globals.maxSize = 2 * 1024^3)
+  future::plan("multisession", workers = 4)
+
+  cellchat <- identifyOverExpressedGenes(cellchat)
+  cellchat <- identifyOverExpressedInteractions(cellchat)
+
+  # Communication inference
+  cellchat <- computeCommunProb(cellchat, type = "triMean")
+  cellchat <- filterCommunication(cellchat, min.cells = 10)
+  cellchat <- computeCommunProbPathway(cellchat)
+  cellchat <- aggregateNet(cellchat)
+
+  return(cellchat)
+}
+
+# ---------------------------------------------------------
+# 3. Run CellChat per Group
+# ---------------------------------------------------------
+groups <- c("NAR", "SAR", "MAR")
+cellchat_list <- list()
+
+for (grp in groups) {
+
+  cat("Running CellChat for:", grp, "\n")
+
+  sub_obj <- subset(
+    seurat_all,
+    cells = rownames(subset(seurat_all@meta.data, group_A == grp))
+  )
+
+  cellchat_list[[grp]] <- run_cellchat(sub_obj)
+}
+
+names(cellchat_list) <- groups
+
+saveRDS(
+  cellchat_list$NAR,
+  file = "scRNA_NAR_cellchat_Net.rds"
+)
+saveRDS(
+  cellchat_list$SAR,
+  file = "scRNA_SAR_cellchat_Net.rds"
+)
+saveRDS(
+  cellchat_list$MAR,
+  file = "scRNA_MAR_cellchat_Net.rds"
+)
+
+# ---------------------------------------------------------
+# 4. Multi‑group Comparison
+# ---------------------------------------------------------
+uterus_cellchat <- mergeCellChat(
+  cellchat_list,
+  add.names = names(cellchat_list)
+)
+
+# Example: incoming signals to Macro_CCL3
+netVisual_bubble(
+  uterus_cellchat,
+  sources.use = NULL,
+  targets.use = "Macro_CCL3",
+  comparison = c(1, 2, 3)
+)
+
+# ---------------------------------------------------------
+# 5. Immune Subset CellChat (CD4 / CD8 / Myeloid / B)
+# ---------------------------------------------------------
+data_CD4    <- readRDS("/media/AnalysisTempDisk2/Wuyisha/HNM_IMMUNE/RNA/data/data_CD4.rds")
+data_CD8    <- readRDS("/media/AnalysisTempDisk2/Wuyisha/HNM_IMMUNE/RNA/data/data_CD8.rds")
+data_B      <- readRDS("/media/AnalysisTempDisk2/Wuyisha/HNM_IMMUNE/RNA/data/data_B.rds")
+data_Myeloid<- readRDS("/media/AnalysisTempDisk2/Wuyisha/HNM_IMMUNE/RNA/data/data_Myeloid.rds")
+
+# Simplify cell types for CellChat
+data_CD4$celltype_chat <- ifelse(
+  data_CD4$celltype == "CD4_Trm", "CD4_Trm", "CD4_T"
+)
+
+data_CD8$celltype_chat <- ifelse(
+  data_CD8$celltype == "CD8_Trm", "CD8_Trm", "CD8_T"
+)
+
+data_Myeloid$celltype_chat <- ifelse(
+  data_Myeloid$celltype == "CD14_Mo", "Mono",
+  ifelse(data_Myeloid$celltype %in% c("cDC","pDC","migDC"), "DC", "Macro")
+)
+
+data_B$celltype_chat <- ifelse(
+  data_B$celltype %in% c("Plasma_IGHA1","Plasma_IGHG1"), "Plasma", "B Cells"
+)
+
+# Merge immune subsets
+seurat_immune <- merge(
+  data_CD4,
+  y = list(data_CD8, data_Myeloid, data_B),
+  project = "HNM_immune"
+)
+
+seurat_immune <- subset(
+  seurat_immune,
+  cells = rownames(subset(seurat_immune@meta.data, group_A != "PAR"))
+)
+
+saveRDS(
+  seurat_immune,
+  file = "data_for_cellchat_CD4_CD8_Trm.rds"
+)
+
+# ---------------------------------------------------------
+# 6. CellChat on Immune Subsets
+# ---------------------------------------------------------
+cellchat_immune <- run_cellchat(
+  seurat_immune,
+  group_col = "celltype_chat"
+)
+
+saveRDS(
+  cellchat_immune,
+  file = "scRNA_immune_cellchat_Net.rds"
+)
+
+# ---------------------------------------------------------
+# 7. Visualization Examples
+# ---------------------------------------------------------
+# Number of interactions
+groupSize <- as.numeric(table(cellchat_immune@idents))
+netAnalysis_plotInteractionCount(cellchat_immune)
+
+# Interaction strength
+netAnalysis_plotInteractionStrength(cellchat_immune)
+
+# Pathway contribution
+pathways <- c("MIF", "TGFb", "TNF", "CXCL", "CCL")
+netVisual_aggregate(
+  cellchat_immune,
+  signaling = pathways,
+  layout = "circle"
+)
+
+# =========================================================
+# End of CellChat pipeline
+# Ready for figure assembly / manuscript
+# =========================================================
