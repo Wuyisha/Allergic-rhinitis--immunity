@@ -65,7 +65,7 @@ data_list <- lapply(data_list, function(obj) {
     subset =
       nFeature_RNA > nF_q[1] &
       nFeature_RNA < nF_q[2] &
-      percent_mito < mt_q[1]
+      percent_mito < mt_q[1] & percent_mito < 25
   )
 })
 
@@ -133,13 +133,7 @@ seurat_merged <- merge(
   y = data_list[-1],
   project = "HNM_RNA"
 )
-
-seurat_merged
-# An object of class Seurat
-# 35124 features across 339405 samples within 1 assay
-# Active assay: RNA
-
-saveRDS(seurat_merged, "HNM_24samples_data.rds")
+saveRDS(seurat_merged, "HNM_22samples_data.rds")
 
 # ---------------------------------------------------------
 # 7. Quick Visualization
